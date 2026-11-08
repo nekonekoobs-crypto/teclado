@@ -1,0 +1,15 @@
+*.iml
+.gradle/
+/local.properties
+/.idea/
+.DS_Store
+/build/
+/app/build/
+/captures/
+.externalNativeBuild/
+.cxx/
+
+# Claves de firma: NUNCA subirlas al repositorio
+*.jks
+*.keystore
+keystore.properties
