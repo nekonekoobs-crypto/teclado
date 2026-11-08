@@ -17,6 +17,10 @@
             </intent-filter>
         </activity>
 
+        <activity
+            android:name=".PacksActivity"
+            android:exported="false" />
+
         <service
             android:name=".KeyboardService"
             android:exported="true"
