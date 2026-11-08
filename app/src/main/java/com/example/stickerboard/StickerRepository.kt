@@ -6,7 +6,7 @@ import org.json.JSONObject
 import java.io.File
 import java.util.zip.ZipInputStream
 
-data class Sticker(val file: File, val pack: String, val tags: Set<String>)
+data class Sticker(val file: File, val pack: String, val tags: Set<String>, val label: String = "")
 
 /**
  * Los paquetes viven en filesDir/packs/<nombre>/ con las imágenes y un tags.json opcional:
@@ -18,18 +18,90 @@ class StickerRepository(private val context: Context) {
 
     private val root get() = File(context.filesDir, "packs").also { it.mkdirs() }
 
+    private val tagger = StickerSuggester()
+
     fun all(): List<Sticker> {
         val result = mutableListOf<Sticker>()
         root.listFiles()?.filter { it.isDirectory }?.forEach { dir ->
             val tagMap = readTags(File(dir, "tags.json"))
+            val labels = readLabels(dir)
             dir.listFiles()?.filter { isImage(it.name) }?.sortedBy { it.name }?.forEach { f ->
+                val label = labels[f.name].orEmpty()
                 val tags = mutableSetOf<String>()
                 tagMap[f.name]?.let { tags += it }
-                tags += f.nameWithoutExtension.lowercase().split(Regex("[^\\p{L}\\p{N}]+")).filter { it.length > 1 }
-                result += Sticker(f, dir.name, tags)
+                if (label.isNotBlank()) {
+                    // El nombre que le pusiste (y los emojis equivalentes) es lo que usa el teclado
+                    tags += tagger.expandTags(label)
+                } else {
+                    tags += f.nameWithoutExtension.lowercase().split(Regex("[^\\p{L}\\p{N}]+")).filter { it.length > 1 }
+                }
+                result += Sticker(f, dir.name, tags, label)
             }
         }
         return result
+    }
+
+    // ---------- Nombres editables (labels.json) ----------
+
+    private fun readLabels(dir: File): Map<String, String> {
+        val f = File(dir, "labels.json")
+        if (!f.exists()) return emptyMap()
+        return try {
+            val obj = JSONObject(f.readText())
+            obj.keys().asSequence().associateWith { obj.getString(it) }
+        } catch (_: Exception) {
+            emptyMap()
+        }
+    }
+
+    fun setLabel(file: File, label: String) {
+        val dir = file.parentFile ?: return
+        val map = readLabels(dir).toMutableMap()
+        if (label.isBlank()) map.remove(file.name) else map[file.name] = label.trim()
+        val obj = JSONObject()
+        map.forEach { (k, v) -> obj.put(k, v) }
+        File(dir, "labels.json").writeText(obj.toString())
+    }
+
+    fun deleteSticker(file: File) {
+        setLabel(file, "")
+        file.delete()
+    }
+
+    /** Copia imágenes elegidas por el usuario dentro de un paquete y devuelve los archivos nuevos. */
+    fun addStickers(packDir: File, uris: List<Uri>): List<File> {
+        val added = mutableListOf<File>()
+        val stamp = System.currentTimeMillis()
+        uris.forEachIndexed { i, uri ->
+            val ext = extensionFor(context.contentResolver.getType(uri))
+            context.contentResolver.openInputStream(uri)?.use { input ->
+                val f = File(packDir, "sticker_${stamp}_$i.$ext")
+                f.outputStream().use { input.copyTo(it) }
+                added += f
+            }
+        }
+        return added
+    }
+
+    /** Paquetes con su nombre visible (name.txt) y sus stickers, para la pantalla de paquetes. */
+    fun packs(): List<Pack> {
+        val grouped = all().groupBy { it.file.parentFile }
+        return root.listFiles()?.filter { it.isDirectory }?.sortedBy { it.name }?.map { dir ->
+            val name = File(dir, "name.txt").takeIf { it.exists() }?.readText()?.trim().orEmpty().ifEmpty { dir.name }
+            Pack(name, dir, grouped[dir].orEmpty())
+        } ?: emptyList()
+    }
+
+    fun deletePack(dir: File) {
+        if (dir.parentFile == root) dir.deleteRecursively()
+    }
+
+    /** Carpeta fija por nombre: volver a importar el mismo paquete lo reemplaza en vez de duplicarlo. */
+    fun replacePackDir(name: String): File {
+        val d = File(root, name.replace(Regex("[^\\p{L}\\p{N}_-]"), "_"))
+        d.deleteRecursively()
+        d.mkdirs()
+        return d
     }
 
     fun createPackDir(name: String): File =

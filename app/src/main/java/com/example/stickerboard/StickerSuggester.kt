@@ -30,6 +30,23 @@ class StickerSuggester {
         "ayuda" to listOf("🆘", "🙏"), "help" to listOf("🆘", "🙏"), "porfa" to listOf("🙏", "🥺"), "please" to listOf("🙏", "🥺")
     )
 
+    private val normDict: Map<String, List<String>> by lazy { dictionary.mapKeys { normalize(it.key) } }
+
+    /** Convierte el nombre que el usuario le puso a un sticker en etiquetas: sus palabras + emojis equivalentes. */
+    fun expandTags(label: String): Set<String> {
+        val out = linkedSetOf<String>()
+        val phrases = label.lowercase().split(Regex("[,;\\n]+")).map { it.trim() }.filter { it.isNotEmpty() }
+        for (p in phrases) {
+            out += normalize(p)
+            normDict[normalize(p)]?.let { l -> out += l.map { normalize(it) } }
+            for (w in p.split(Regex("\\s+")).filter { it.length > 1 }) {
+                out += normalize(w)
+                normDict[normalize(w)]?.let { l -> out += l.map { normalize(it) } }
+            }
+        }
+        return out
+    }
+
     fun suggest(textBeforeCursor: String, stickers: List<Sticker>, limit: Int = 12): List<Sticker> {
         if (stickers.isEmpty()) return emptyList()
         val tokens = textBeforeCursor.lowercase().takeLast(60)
@@ -44,10 +61,10 @@ class StickerSuggester {
         tokens.forEachIndexed { i, tok ->
             val weight = i + 1
             add(tok, weight)
-            dictionary[tok]?.forEach { add(it, weight) }
+            normDict[normalize(tok)]?.forEach { add(it, weight) }
             if (i > 0) {
                 val bigram = tokens[i - 1] + " " + tok
-                dictionary[bigram]?.forEach { add(it, weight + 1) }
+                normDict[normalize(bigram)]?.forEach { add(it, weight + 1) }
             }
         }
         if (wanted.isEmpty()) return emptyList()
@@ -60,5 +77,8 @@ class StickerSuggester {
             .map { it.first }
     }
 
-    private fun normalize(s: String) = s.replace("️", "").lowercase()
+    /** Minúsculas y sin acentos, para que "cumpleanos" coincida con "cumpleaños". */
+    private fun normalize(s: String): String =
+        java.text.Normalizer.normalize(s.lowercase(), java.text.Normalizer.Form.NFD)
+            .replace(Regex("\\p{Mn}+"), "")
 }
