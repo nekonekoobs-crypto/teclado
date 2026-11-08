@@ -4,15 +4,11 @@ import android.content.Context
 import android.content.SharedPreferences
 import android.content.res.Configuration
 import android.graphics.Color
-import android.graphics.ImageDecoder
-import android.graphics.drawable.AnimatedImageDrawable
 import android.graphics.drawable.GradientDrawable
-import android.os.Build
-import java.io.File
 import android.inputmethodservice.InputMethodService
-import android.net.Uri
 import android.os.Handler
 import android.os.Looper
+import android.text.InputType
 import android.view.Gravity
 import android.view.KeyEvent
 import android.view.MotionEvent
@@ -29,18 +25,35 @@ import androidx.core.view.updatePadding
 
 class KeyboardService : InputMethodService() {
 
+    private data class SpellInfo(val suggestions: List<String>, val typo: Boolean, val recommended: Boolean)
+    private data class Correction(val original: String, val fix: String, val boundary: String)
+
     private lateinit var prefs: SharedPreferences
     private lateinit var repo: StickerRepository
+    private lateinit var predictor: WordPredictor
+    private lateinit var spell: SpellHelper
     private val suggester = StickerSuggester()
     private val translator = TranslatorManager()
     private val handler = Handler(Looper.getMainLooper())
+    private val spellCache = HashMap<String, SpellInfo>()
+    private var stickers: List<Sticker> = emptyList()
 
     private var theme = Themes.all[0]
     private var shift = false
     private var symbols = false
     private var pairIndex = 0
 
+    private var predictiveOn = true
+    private var autocorrectOn = true
+    private var builtPredictive = true
+    private var fieldAllows = true   // campo de texto normal (no contraseña, correo ni URL)
+    private var fieldLearns = true   // el campo no pidió "sin aprendizaje personalizado"
+    private var lastCorrection: Correction? = null
+    private var pendingSpellWord: String? = null
+    private val spellRunnable = Runnable { pendingSpellWord?.let { spell.check(it) } }
+
     private lateinit var root: LinearLayout
+    private lateinit var wordBar: LinearLayout
     private lateinit var strip: LinearLayout
     private lateinit var translateBar: LinearLayout
     private lateinit var keys: LinearLayout
@@ -50,12 +63,22 @@ class KeyboardService : InputMethodService() {
         super.onCreate()
         prefs = getSharedPreferences("prefs", Context.MODE_PRIVATE)
         repo = StickerRepository(this)
+        predictor = WordPredictor.get(this)
+        spell = SpellHelper(this) { word, suggestions, typo, recommended ->
+            if (spellCache.size > 300) spellCache.clear()
+            spellCache[word.lowercase()] = SpellInfo(suggestions, typo, recommended)
+            refreshWordBar()
+        }
+        spell.open()
         theme = Themes.all[prefs.getInt("theme", 0).coerceIn(0, Themes.all.lastIndex)]
         pairIndex = prefs.getInt("pair", 0).coerceIn(0, translator.pairs.lastIndex)
     }
 
     override fun onDestroy() {
+        handler.removeCallbacksAndMessages(null)
         translator.close()
+        spell.close()
+        predictor.save()
         super.onDestroy()
     }
 
@@ -67,6 +90,7 @@ class KeyboardService : InputMethodService() {
             v.updatePadding(bottom = nav.bottom + dp(2))
             insets
         }
+        readSettings()
         buildViews()
         return root
     }
@@ -75,10 +99,21 @@ class KeyboardService : InputMethodService() {
         super.onStartInputView(info, restarting)
         shift = false
         symbols = false
-        if (::root.isInitialized) {
-            renderKeys()
-            refreshSuggestions()
-        }
+        lastCorrection = null
+        spellCache.clear()
+        stickers = repo.all()
+        readFieldType(info)
+        if (!::root.isInitialized) return
+        val before = predictiveOn
+        readSettings()
+        if (before != predictiveOn || builtPredictive != predictiveOn) buildViews() else renderKeys()
+        refreshAll()
+    }
+
+    override fun onFinishInputView(finishingInput: Boolean) {
+        super.onFinishInputView(finishingInput)
+        lastCorrection = null
+        predictor.save()
     }
 
     override fun onConfigurationChanged(newConfig: Configuration) {
@@ -91,7 +126,33 @@ class KeyboardService : InputMethodService() {
         candidatesStart: Int, candidatesEnd: Int
     ) {
         super.onUpdateSelection(oldSelStart, oldSelEnd, newSelStart, newSelEnd, candidatesStart, candidatesEnd)
-        if (::strip.isInitialized) refreshSuggestions()
+        if (::strip.isInitialized) {
+            refreshSuggestions()
+            refreshWordBar()
+        }
+    }
+
+    // ---------- Ajustes y tipo de campo ----------
+
+    private fun readSettings() {
+        predictiveOn = prefs.getBoolean("predictive", true)
+        autocorrectOn = prefs.getBoolean("autocorrect", true)
+    }
+
+    /** No se predice, corrige ni aprende en contraseñas, correos o direcciones web. */
+    private fun readFieldType(info: EditorInfo?) {
+        val type = info?.inputType ?: 0
+        val cls = type and InputType.TYPE_MASK_CLASS
+        val v = type and InputType.TYPE_MASK_VARIATION
+        val sensitive = v == InputType.TYPE_TEXT_VARIATION_PASSWORD ||
+            v == InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD ||
+            v == InputType.TYPE_TEXT_VARIATION_WEB_PASSWORD ||
+            v == InputType.TYPE_TEXT_VARIATION_EMAIL_ADDRESS ||
+            v == InputType.TYPE_TEXT_VARIATION_WEB_EMAIL_ADDRESS ||
+            v == InputType.TYPE_TEXT_VARIATION_URI
+        fieldAllows = cls == InputType.TYPE_CLASS_TEXT && !sensitive
+        val noLearning = ((info?.imeOptions ?: 0) and EditorInfo.IME_FLAG_NO_PERSONALIZED_LEARNING) != 0
+        fieldLearns = fieldAllows && !noLearning
     }
 
     // ---------- Construcción de la vista ----------
@@ -99,8 +160,16 @@ class KeyboardService : InputMethodService() {
     private fun buildViews() {
         root.removeAllViews()
         root.setBackgroundColor(theme.bg)
+        builtPredictive = predictiveOn
 
-        // Barra superior: sugerencias + traductor + tema
+        // Barra de palabras sugeridas
+        wordBar = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        if (predictiveOn) root.addView(wordBar, LinearLayout.LayoutParams(-1, dp(38)))
+
+        // Barra superior: sugerencias de stickers + traductor + tema
         val top = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
@@ -143,7 +212,8 @@ class KeyboardService : InputMethodService() {
         val dm = resources.displayMetrics
         val landscape = dm.widthPixels > dm.heightPixels
         val fraction = if (landscape) 0.52f else 0.36f
-        val h = (dm.heightPixels * fraction - dp(52)) / 4f
+        val bars = dp(52) + if (predictiveOn) dp(38) else 0
+        val h = (dm.heightPixels * fraction - bars) / 4f
         return h.toInt().coerceIn(dp(34), dp(60))
     }
 
@@ -169,9 +239,9 @@ class KeyboardService : InputMethodService() {
         })
         keys.addView(row(h) { r ->
             r.addView(key(if (symbols) "ABC" else "?123", 1.5f, special = true) { symbols = !symbols; renderKeys() })
-            r.addView(key(",", 1f) { type(",") })
-            r.addView(key("espacio", 4.5f) { type(" ") })
-            r.addView(key(".", 1f) { type(".") })
+            r.addView(key(",", 1f) { boundary(",") })
+            r.addView(key("espacio", 4.5f) { boundary(" ") })
+            r.addView(key(".", 1f) { boundary(".") })
             r.addView(key("⏎", 1.5f, accent = true) { enter() })
         })
     }
@@ -212,8 +282,12 @@ class KeyboardService : InputMethodService() {
         k.setOnTouchListener { _, e ->
             when (e.action) {
                 MotionEvent.ACTION_DOWN -> {
-                    sendDownUpKeyEvents(KeyEvent.KEYCODE_DEL)
-                    handler.postDelayed(repeat, 400)
+                    // Borrar justo después de una autocorrección devuelve la palabra original
+                    if (!revertCorrection()) {
+                        lastCorrection = null
+                        sendDownUpKeyEvents(KeyEvent.KEYCODE_DEL)
+                        handler.postDelayed(repeat, 400)
+                    }
                 }
                 MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> handler.removeCallbacks(repeat)
             }
@@ -249,24 +323,189 @@ class KeyboardService : InputMethodService() {
 
     private fun type(s: String) {
         currentInputConnection?.commitText(s, 1)
+        lastCorrection = null
         if (shift && !symbols) { shift = false; renderKeys() }
-        refreshSuggestions()
+        afterChange()
+    }
+
+    /** Espacio o signo que termina una palabra: aquí se autocorrige y se aprende. */
+    private fun boundary(ch: String) {
+        val ic = currentInputConnection ?: return
+        val word = if (fieldAllows) wordBeforeCursor() else ""
+        var corrected = false
+        if (word.isNotEmpty()) {
+            val prev = previousWord()
+            val fix = if (autocorrectOn) autoFix(word) else null
+            if (fix != null) {
+                ic.beginBatchEdit()
+                ic.deleteSurroundingText(word.length, 0)
+                ic.commitText(fix + ch, 1)
+                ic.endBatchEdit()
+                lastCorrection = Correction(word, fix, ch)
+                corrected = true
+            } else {
+                ic.commitText(ch, 1)
+            }
+            if (fieldLearns && predictiveOn) predictor.learn(fix ?: word, prev)
+        } else {
+            ic.commitText(ch, 1)
+        }
+        if (!corrected) lastCorrection = null
+        afterChange()
     }
 
     private fun enter() {
+        if (fieldAllows && autocorrectOn) boundary("")
+        lastCorrection = null
         if (!sendDefaultEditorAction(true)) sendDownUpKeyEvents(KeyEvent.KEYCODE_ENTER)
+    }
+
+    private fun afterChange() {
+        refreshSuggestions()
+        refreshWordBar()
+        scheduleSpell()
+    }
+
+    // ---------- Texto predictivo y corrección ----------
+
+    private fun textBefore(n: Int): String = currentInputConnection?.getTextBeforeCursor(n, 0)?.toString().orEmpty()
+
+    private fun wordBeforeCursor(): String = WORD_END.find(textBefore(40))?.value ?: ""
+
+    private fun previousWord(): String? {
+        val before = textBefore(80)
+        val w = WORD_END.find(before)?.value ?: ""
+        return PREV_WORD.find(before.dropLast(w.length))?.groupValues?.get(1)
+    }
+
+    private fun atSentenceStart(textBefore: String): Boolean {
+        if (textBefore.isEmpty() || textBefore.endsWith("\n")) return true
+        val t = textBefore.trimEnd()
+        return t.isEmpty() || t.last() in ".!?"
+    }
+
+    private fun matchCase(original: String, candidate: String): String = when {
+        original.length > 1 && original.any { it.isLetter() } && original.all { !it.isLetter() || it.isUpperCase() } ->
+            candidate.uppercase()
+        original.isNotEmpty() && original.first().isUpperCase() -> candidate.replaceFirstChar { it.uppercase() }
+        else -> candidate
+    }
+
+    /** Solo corrige si el corrector del sistema está seguro (sugerencia recomendada) y la palabra no es conocida. */
+    private fun autoFix(word: String): String? {
+        if (word.length < 3 || predictor.isKnown(word)) return null
+        if (word.drop(1).any { it.isUpperCase() }) return null // siglas, nombres raros
+        if (word.first().isUpperCase() && !atSentenceStart(textBefore(80).dropLast(word.length))) return null // nombres propios
+        val info = spellCache[word.lowercase()] ?: return null
+        if (!info.typo || !info.recommended || info.suggestions.isEmpty()) return null
+        val fix = info.suggestions.first()
+        if (fix.equals(word, ignoreCase = true)) return null
+        return matchCase(word, fix)
+    }
+
+    private fun revertCorrection(): Boolean {
+        val c = lastCorrection ?: return false
+        lastCorrection = null
+        val ic = currentInputConnection ?: return false
+        val committed = c.fix + c.boundary
+        if (!textBefore(committed.length).endsWith(committed)) return false
+        ic.beginBatchEdit()
+        ic.deleteSurroundingText(committed.length, 0)
+        ic.commitText(c.original + c.boundary, 1)
+        ic.endBatchEdit()
+        predictor.markKnown(c.original) // no volver a corregir esta palabra
+        afterChange()
+        return true
+    }
+
+    private fun scheduleSpell() {
+        handler.removeCallbacks(spellRunnable)
+        if (!(predictiveOn || autocorrectOn) || !fieldAllows) return
+        val w = wordBeforeCursor()
+        if (w.length < 3 || predictor.isKnown(w) || spellCache.containsKey(w.lowercase())) return
+        pendingSpellWord = w
+        handler.postDelayed(spellRunnable, 60)
+    }
+
+    private fun refreshWordBar() {
+        if (!::wordBar.isInitialized || !builtPredictive) return
+        wordBar.removeAllViews()
+        if (!fieldAllows) return
+
+        val word = wordBeforeCursor()
+        val items = ArrayList<Pair<String, Boolean>>() // texto, resaltar (corrección)
+        if (word.isNotEmpty()) {
+            if (!predictor.isKnown(word)) {
+                val info = spellCache[word.lowercase()]
+                val fixes = when {
+                    info != null && info.typo && info.suggestions.isNotEmpty() -> info.suggestions.take(2)
+                    !spell.available -> predictor.suggestFix(word, 2)
+                    else -> emptyList()
+                }
+                fixes.forEach { items.add(matchCase(word, it) to true) }
+            }
+            predictor.complete(word, 4).forEach { c ->
+                val t = matchCase(word, c)
+                if (items.none { it.first.equals(t, ignoreCase = true) }) items.add(t to false)
+            }
+        } else {
+            val startCap = atSentenceStart(textBefore(80))
+            predictor.next(previousWord(), 4).forEach {
+                items.add((if (startCap) it.replaceFirstChar { c -> c.uppercase() } else it) to false)
+            }
+        }
+
+        items.take(3).forEachIndexed { i, (text, highlight) ->
+            if (i > 0) {
+                wordBar.addView(View(this).apply {
+                    setBackgroundColor(theme.keyText)
+                    alpha = 0.2f
+                    layoutParams = LinearLayout.LayoutParams(dp(1), dp(20))
+                })
+            }
+            wordBar.addView(chip(text, highlight) { applySuggestion(text) })
+        }
+    }
+
+    private fun chip(text: String, highlight: Boolean, onClick: () -> Unit) = TextView(this).apply {
+        this.text = text
+        gravity = Gravity.CENTER
+        textSize = 16f
+        maxLines = 1
+        setTextColor(if (highlight) theme.accent else theme.keyText)
+        layoutParams = LinearLayout.LayoutParams(0, -1, 1f)
+        setOnClickListener { onClick() }
+    }
+
+    private fun applySuggestion(text: String) {
+        val ic = currentInputConnection ?: return
+        val word = wordBeforeCursor()
+        val prev = previousWord()
+        ic.beginBatchEdit()
+        if (word.isNotEmpty()) ic.deleteSurroundingText(word.length, 0)
+        ic.commitText("$text ", 1)
+        ic.endBatchEdit()
+        if (fieldLearns) predictor.learn(text, prev)
+        lastCorrection = null
+        afterChange()
     }
 
     // ---------- Stickers ----------
 
+    private fun refreshAll() {
+        refreshSuggestions()
+        refreshWordBar()
+    }
+
     private fun refreshSuggestions() {
         if (!::strip.isInitialized) return
-        val before = currentInputConnection?.getTextBeforeCursor(60, 0)?.toString().orEmpty()
-        val list = suggester.suggest(before, repo.all())
         strip.removeAllViews()
+        if (!fieldAllows) return // no se lee el texto de contraseñas, correos ni direcciones
+        val before = textBefore(60)
+        val list = suggester.suggest(before, stickers)
         if (list.isEmpty()) {
             strip.addView(TextView(this).apply {
-                text = if (repo.packCount() == 0) "Importa paquetes de stickers en la app" else "Escribe para ver stickers…"
+                text = if (stickers.isEmpty()) "Importa paquetes de stickers en la app" else "Escribe para ver stickers…"
                 setTextColor(theme.keyText)
                 alpha = 0.6f
                 textSize = 13f
@@ -288,23 +527,6 @@ class KeyboardService : InputMethodService() {
         }
     }
 
-    /** Muestra el sticker; si es webp/gif animado (Android 9+) se reproduce en bucle. */
-    private fun ImageView.loadSticker(f: File) {
-        if (Build.VERSION.SDK_INT >= 28) {
-            try {
-                val d = ImageDecoder.decodeDrawable(ImageDecoder.createSource(f))
-                setImageDrawable(d)
-                if (d is AnimatedImageDrawable) {
-                    d.repeatCount = AnimatedImageDrawable.REPEAT_INFINITE
-                    d.start()
-                }
-                return
-            } catch (_: Exception) {
-            }
-        }
-        setImageURI(Uri.fromFile(f))
-    }
-
     // ---------- Temas ----------
 
     private fun nextTheme() {
@@ -312,7 +534,7 @@ class KeyboardService : InputMethodService() {
         theme = Themes.all[i]
         prefs.edit().putInt("theme", i).apply()
         buildViews()
-        refreshSuggestions()
+        refreshAll()
     }
 
     // ---------- Traductor ----------
@@ -348,10 +570,16 @@ class KeyboardService : InputMethodService() {
                     commitText(result, 1)
                     endBatchEdit()
                 }
-                refreshSuggestions()
+                lastCorrection = null
+                refreshAll()
             },
             onError = {
                 Toast.makeText(this, "No se pudo traducir (¿sin internet para bajar el idioma?)", Toast.LENGTH_LONG).show()
             })
+    }
+
+    companion object {
+        private val WORD_END = Regex("[\\p{L}'’]+$")
+        private val PREV_WORD = Regex("([\\p{L}'’]+)\\s+$")
     }
 }

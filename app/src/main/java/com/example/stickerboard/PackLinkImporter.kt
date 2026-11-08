@@ -6,75 +6,150 @@ import java.io.ByteArrayOutputStream
 import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
+import java.net.URLDecoder
 
 /**
  * Descarga un paquete a partir de un enlace de sigstick.com/pack/<id>.
- * Lee la página, encuentra la carpeta del CDN y para cada sticker prueba primero
- * los formatos animados (webp, gif) y luego png; si ninguno responde, usa la miniatura.
+ * Lee la página, encuentra las miniaturas en el CDN (nombres como 0.thumb128.webp o 0-1.thumb128.png)
+ * y para cada sticker intenta primero una versión más grande; si no existe, guarda la miniatura.
  */
 object PackLinkImporter {
 
-    data class Result(val total: Int, val animated: Int, val thumbsOnly: Int, val error: String? = null)
+    data class Result(
+        val total: Int,
+        val animated: Int,
+        val thumbsOnly: Int,
+        val error: String? = null,
+        val log: String = ""
+    )
+
+    private data class Thumb(val url: String, val ext: String, val size: Int)
+
+    private const val UA =
+        "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Mobile Safari/537.36"
 
     fun import(repo: StickerRepository, link: String, onDone: (Result) -> Unit) {
         val main = Handler(Looper.getMainLooper())
         Thread {
+            val log = StringBuilder()
             val result = try {
-                run(repo, link)
+                run(repo, link, log)
             } catch (e: Exception) {
-                Result(0, 0, 0, e.message ?: "Error desconocido")
+                Result(0, 0, 0, e.message ?: e.javaClass.simpleName, log.toString())
             }
             main.post { onDone(result) }
         }.start()
     }
 
-    private fun run(repo: StickerRepository, link: String): Result {
-        val uri = try { java.net.URI(link) } catch (_: Exception) { return Result(0, 0, 0, "Enlace no válido") }
-        val host = uri.host ?: return Result(0, 0, 0, "Enlace no válido")
+    private fun note(log: StringBuilder, line: String) {
+        if (log.count { it == '\n' } < 30) log.append(line).append('\n')
+    }
+
+    private fun run(repo: StickerRepository, link: String, log: StringBuilder): Result {
+        fun fail(msg: String) = Result(0, 0, 0, msg, log.toString())
+
+        val uri = try { java.net.URI(link.trim()) } catch (_: Exception) { return fail("Enlace no válido") }
+        val host = uri.host ?: return fail("Enlace no válido")
         if (uri.scheme != "https" || !(host == "sigstick.com" || host.endsWith(".sigstick.com")))
-            return Result(0, 0, 0, "Por ahora solo acepto enlaces https de sigstick.com")
+            return fail("Por ahora solo acepto enlaces https de sigstick.com")
         val id = Regex("/pack/([A-Za-z0-9_-]+)").find(uri.path ?: "")?.groupValues?.get(1)
-            ?: return Result(0, 0, 0, "No encontré el ID del paquete en el enlace")
+            ?: return fail("No encontré el ID del paquete en el enlace")
 
-        val html = download("https://www.sigstick.com/pack/$id", 3_000_000, requireImage = false)
-            ?.toString(Charsets.UTF_8)
-            ?.replace("\\/", "/")?.replace("&amp;", "&")
-            ?: return Result(0, 0, 0, "No pude abrir la página del paquete")
+        // 1) Página del paquete
+        val pageBytes = download("https://www.sigstick.com/pack/$id", 4_000_000, false, log, "página")
+            ?: return fail("No pude abrir la página del paquete")
+        val raw = String(pageBytes, Charsets.UTF_8)
+        val unescaped = raw.replace("\\/", "/").replace("\\u002F", "/").replace("&amp;", "&")
+        val decoded = try { URLDecoder.decode(unescaped, "UTF-8") } catch (_: Exception) { unescaped }
+        val text = unescaped + "\n" + decoded
+        note(log, "página: ${pageBytes.size} bytes")
 
-        // https://<cdn>/<id>/<n>.<algo>.png  -> base + índice + miniatura
-        val pattern = Regex("""(https://[^"'\s)\\]+/$id)/(\d+)\.[A-Za-z0-9._-]*?(?:png|webp|gif|jpg)""")
-        val found = pattern.findAll(html).toList()
-        if (found.isEmpty()) return Result(0, 0, 0, "No encontré stickers en la página (¿cambió el formato del sitio?)")
-        val base = found.first().groupValues[1]
-        val thumbs = LinkedHashMap<Int, String>()
-        found.forEach { thumbs.putIfAbsent(it.groupValues[2].toInt(), it.value) }
+        // 2) Miniaturas: .../<id>/<nombre>.thumb<tamaño>.<ext>   (nombre = 0, 17-2, 52-1, ...)
+        val pattern = Regex("""(https://[^"'\s)\\<>]+?/$id)/(\d+(?:-\d+)?)\.thumb(\d+)\.(png|webp|gif|jpg)""")
+        val matches = pattern.findAll(text).toList()
+        if (matches.isEmpty()) {
+            note(log, "¿aparece cdnstep en la página? ${text.contains("cdnstep")}")
+            return fail("No encontré stickers en la página (¿cambió el formato del sitio?)")
+        }
+        val base = matches.first().groupValues[1]
+        val thumbs = LinkedHashMap<String, Thumb>()
+        matches.forEach {
+            val stem = it.groupValues[2]
+            val size = it.groupValues[3].toInt()
+            val old = thumbs[stem]
+            if (old == null || size > old.size) thumbs[stem] = Thumb(it.value, it.groupValues[4], size)
+        }
+        note(log, "miniaturas encontradas: ${thumbs.size} en $base")
 
-        val dir = repo.createPackDir("sigstick_$id")
+        val title = Regex("<title[^>]*>([^<]{1,160})</title>", RegexOption.IGNORE_CASE).find(raw)?.groupValues?.get(1)
+            ?.replace("&amp;", "&")?.replace("&#x27;", "'")?.replace("&#39;", "'")
+            ?.substringBefore(" | ")?.substringBefore(" - ")?.trim().orEmpty()
+
+        val dir = repo.replacePackDir("sigstick_$id")
+        File(dir, "name.txt").writeText(title.ifEmpty { "Sigstick $id" })
+
+        // 3) Descarga: se busca una variante grande con el primer sticker y se reutiliza para el resto
+        val patterns: List<(String, Thumb) -> String> = listOf(
+            { s, t -> "$base/$s.thumb512.${t.ext}" },
+            { s, t -> "$base/$s.thumb256.${t.ext}" },
+            { s, _ -> "$base/$s.webp" },
+            { s, _ -> "$base/$s.gif" },
+            { s, _ -> "$base/$s.png" }
+        )
+        var working: Int? = null
+        var noFull = false
         var animated = 0
         var thumbsOnly = 0
         var saved = 0
-        for ((n, thumbUrl) in thumbs.toSortedMap()) {
+
+        val ordered = thumbs.entries.sortedWith(
+            compareBy({ it.key.substringBefore('-').toInt() }, { it.key })
+        )
+        for ((stem, thumb) in ordered) {
             var data: ByteArray? = null
-            var ext = "png"
+            var kind: String? = null
             var full = false
-            for (cand in listOf("webp", "gif", "png")) {
-                val bytes = download("$base/$n.$cand", 6_000_000, requireImage = true)
-                if (bytes != null) { data = bytes; ext = cand; full = true; break }
+
+            if (!noFull) {
+                val order = if (working != null) listOf(working!!) else patterns.indices.toList()
+                for (i in order) {
+                    val bytes = download(patterns[i](stem, thumb), 8_000_000, true, log, "grande")
+                    val k = bytes?.let { imageKind(it) }
+                    if (bytes != null && k != null) { data = bytes; kind = k; full = true; working = i; break }
+                }
+                if (data == null && working == null) {
+                    noFull = true
+                    note(log, "no encontré versión grande; uso miniaturas")
+                }
             }
             if (data == null) {
-                data = download(thumbUrl, 2_000_000, requireImage = true)
-                if (data != null) thumbsOnly++
+                val bytes = download(thumb.url, 3_000_000, true, log, "miniatura")
+                val k = bytes?.let { imageKind(it) }
+                if (bytes != null && k != null) { data = bytes; kind = k; thumbsOnly++ }
             }
-            if (data == null) continue
-            File(dir, "sticker_$n.$ext").writeBytes(data)
+            if (data == null || kind == null) continue
+
+            File(dir, "sticker_$stem.$kind").writeBytes(data)
             saved++
-            if (full && (ext == "gif" || (ext == "webp" && isAnimatedWebp(data)))) animated++
+            if (kind == "gif" || (kind == "webp" && isAnimatedWebp(data))) animated++
         }
         if (saved == 0) {
             dir.deleteRecursively()
-            return Result(0, 0, 0, "No pude descargar ninguna imagen")
+            return fail("Encontré ${thumbs.size} stickers pero no pude descargar ninguna imagen")
         }
-        return Result(saved, animated, thumbsOnly)
+        return Result(saved, animated, thumbsOnly, null, log.toString())
+    }
+
+    /** Identifica la imagen por sus primeros bytes (no confía en el Content-Type del servidor). */
+    private fun imageKind(b: ByteArray): String? {
+        if (b.size < 12) return null
+        if (b[0] == 0x89.toByte() && b[1] == 'P'.code.toByte() && b[2] == 'N'.code.toByte() && b[3] == 'G'.code.toByte()) return "png"
+        if (b[0] == 'G'.code.toByte() && b[1] == 'I'.code.toByte() && b[2] == 'F'.code.toByte()) return "gif"
+        if (b[0] == 0xFF.toByte() && b[1] == 0xD8.toByte()) return "jpg"
+        if (b[0] == 'R'.code.toByte() && b[1] == 'I'.code.toByte() && b[2] == 'F'.code.toByte() && b[3] == 'F'.code.toByte() &&
+            b[8] == 'W'.code.toByte() && b[9] == 'E'.code.toByte() && b[10] == 'B'.code.toByte() && b[11] == 'P'.code.toByte()
+        ) return "webp"
+        return null
     }
 
     /** Un WebP animado contiene el bloque "ANIM" en su cabecera. */
@@ -83,16 +158,22 @@ object PackLinkImporter {
         return head.contains("ANIM")
     }
 
-    private fun download(url: String, maxBytes: Int, requireImage: Boolean): ByteArray? {
+    private fun download(url: String, maxBytes: Int, quiet404: Boolean, log: StringBuilder, label: String): ByteArray? {
         var conn: HttpURLConnection? = null
         return try {
             conn = (URL(url).openConnection() as HttpURLConnection).apply {
                 connectTimeout = 10_000
                 readTimeout = 15_000
-                setRequestProperty("User-Agent", "Mozilla/5.0 (Android) StickerBoard")
+                instanceFollowRedirects = true
+                setRequestProperty("User-Agent", UA)
+                setRequestProperty("Referer", "https://www.sigstick.com/")
+                setRequestProperty("Accept", "image/webp,image/png,image/*,text/html,*/*;q=0.8")
             }
-            if (conn.responseCode != 200) return null
-            if (requireImage && conn.contentType?.startsWith("image/") != true) return null
+            val code = conn.responseCode
+            if (code != 200) {
+                if (!(quiet404 && code == 404)) note(log, "$label: HTTP $code ${url.takeLast(60)}")
+                return null
+            }
             val out = ByteArrayOutputStream()
             conn.inputStream.use { input ->
                 val buf = ByteArray(8192)
@@ -104,7 +185,8 @@ object PackLinkImporter {
                 }
             }
             out.toByteArray()
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+            note(log, "$label: ${e.javaClass.simpleName} ${e.message ?: ""} ${url.takeLast(50)}")
             null
         } finally {
             conn?.disconnect()

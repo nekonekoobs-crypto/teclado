@@ -6,7 +6,9 @@ import android.os.Bundle
 import android.provider.Settings
 import android.view.Gravity
 import android.view.inputmethod.InputMethodManager
+import android.app.AlertDialog
 import android.widget.Button
+import android.widget.CheckBox
 import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.ScrollView
@@ -19,6 +21,7 @@ class MainActivity : ComponentActivity() {
 
     private lateinit var repo: StickerRepository
     private lateinit var status: TextView
+    private val prefs by lazy { getSharedPreferences("prefs", Context.MODE_PRIVATE) }
 
     private val pickImages = registerForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
         val n = repo.importImages(uris)
@@ -59,6 +62,23 @@ class MainActivity : ComponentActivity() {
         button("Importar paquete (.zip / .wastickers)") { pickZip.launch(arrayOf("*/*")) }
         button("Importar imágenes sueltas") { pickImages.launch(arrayOf("image/*")) }
 
+        button("Ver mis paquetes de stickers") { startActivity(Intent(this, PacksActivity::class.java)) }
+
+        col.addView(CheckBox(this).apply {
+            text = "Texto predictivo (sugiere palabras)"
+            isChecked = prefs.getBoolean("predictive", true)
+            setOnCheckedChangeListener { _, checked -> prefs.edit().putBoolean("predictive", checked).apply() }
+        })
+        col.addView(CheckBox(this).apply {
+            text = "Corrección automática de ortografía"
+            isChecked = prefs.getBoolean("autocorrect", true)
+            setOnCheckedChangeListener { _, checked -> prefs.edit().putBoolean("autocorrect", checked).apply() }
+        })
+        button("Borrar palabras aprendidas") {
+            WordPredictor.get(this).clearLearned()
+            toast("Palabras aprendidas borradas")
+        }
+
         val link = EditText(this).apply {
             hint = "Pega el enlace de un paquete de Sigstick"
             setSingleLine()
@@ -71,9 +91,17 @@ class MainActivity : ComponentActivity() {
             } else {
                 toast("Descargando…")
                 PackLinkImporter.import(repo, url) { r ->
-                    if (r.error != null) toast(r.error)
-                    else toast("${r.total} stickers (${r.animated} animados" +
-                        if (r.thumbsOnly > 0) ", ${r.thumbsOnly} solo en miniatura)" else ")")
+                    if (r.error != null) {
+                        // Se muestra el detalle completo para poder diagnosticar el fallo
+                        AlertDialog.Builder(this)
+                            .setTitle("No se pudo descargar")
+                            .setMessage(r.error + "\n\n" + r.log)
+                            .setPositiveButton("OK", null)
+                            .show()
+                    } else {
+                        toast("${r.total} stickers (${r.animated} animados" +
+                            if (r.thumbsOnly > 0) ", ${r.thumbsOnly} solo en miniatura)" else ")")
+                    }
                     refresh()
                 }
             }
