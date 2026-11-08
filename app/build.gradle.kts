@@ -53,4 +53,6 @@ dependencies {
     implementation("androidx.activity:activity-ktx:1.9.3")
     // Traductor en el dispositivo (los modelos se descargan la primera vez)
     implementation("com.google.mlkit:translate:17.0.3")
+    // Reconoce qué hay en la imagen de un sticker (modelo incluido en la app, sin internet)
+    implementation("com.google.mlkit:image-labeling:17.0.9")
 }
