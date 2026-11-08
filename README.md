@@ -81,3 +81,17 @@ git push origin v0.1.0
 El APK queda en la sección Releases. Instálalo encima de la versión anterior: se actualiza conservando los datos y los paquetes de stickers.
 
 **Importante:** si ya instalaste un APK compilado desde Android Studio (firmado con la clave de depuración), la primera vez que instales el de GitHub tendrás que desinstalar esa versión, porque la firma es distinta. A partir de ahí, todas las actualizaciones van encima.
+
+## Novedades
+
+- **Mis paquetes:** botón "Ver mis paquetes de stickers" en la app principal. Muestra cada paquete con todos sus stickers (los animados se reproducen) y permite borrarlo.
+- **Texto predictivo:** barra de 3 palabras sobre el teclado. Sugiere completar la palabra que escribes o la siguiente palabra. Trae un vocabulario básico en español e inglés y aprende lo que escribes (una palabra cuenta cuando la has escrito al menos 2 veces). Lo aprendido se guarda solo en el teléfono y se borra con "Borrar palabras aprendidas".
+- **Corrección ortográfica:** usa el corrector del sistema Android (el que tengas activo en Ajustes → Idioma y entrada). Las sugerencias aparecen resaltadas en la barra. Al pulsar espacio o un signo se autocorrige solo si el corrector está seguro; si borras justo después, vuelve tu palabra original y no se vuelve a corregir. Si el teléfono no tiene corrector activo, la barra ofrece correcciones simples (una letra de diferencia) pero no autocorrige.
+- **Privacidad:** no se predice, corrige ni aprende en contraseñas, correos y direcciones web, ni en campos que piden "sin aprendizaje personalizado". Ambas funciones se pueden apagar en la app.
+- **Descarga por enlace:** ahora reconoce nombres como `0-1.thumb128.png` y `0.thumb128.webp`, no depende del tipo de contenido que declare el servidor y envía `Referer`. Si falla, la app muestra un cuadro con el detalle del error.
+
+## Nombres de stickers
+
+- En **Ver mis paquetes**, cada sticker muestra su nombre. Tócalo para ver la imagen grande y editar el nombre (estado de ánimo o acción, separado por comas: `feliz, abrazo`).
+- Los nombres se guardan en `labels.json` dentro de cada paquete. El teclado los usa para sugerir el sticker: coincide con lo que escribes aunque falten acentos y reconoce palabras equivalentes (por ejemplo, un sticker llamado "feliz" también aparece al escribir "contento").
+- **Nombrado automático:** al agregar stickers con "+ Agregar", y con el botón "Nombrar automáticamente" para los que no tienen nombre, la app analiza la imagen en el teléfono (ML Kit) y propone un nombre en español. Reconoce objetos y expresiones generales; con dibujos o personajes animados suele dar nombres poco precisos, así que conviene revisarlos. La traducción al español necesita internet la primera vez.
