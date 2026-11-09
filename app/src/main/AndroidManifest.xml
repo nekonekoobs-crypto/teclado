@@ -21,6 +21,10 @@
             android:name=".PacksActivity"
             android:exported="false" />
 
+        <activity
+            android:name=".QuickNameActivity"
+            android:exported="false" />
+
         <service
             android:name=".KeyboardService"
             android:exported="true"
