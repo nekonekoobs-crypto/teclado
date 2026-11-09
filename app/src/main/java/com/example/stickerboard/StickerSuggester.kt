@@ -27,6 +27,7 @@ class StickerSuggester {
         "cansado" to listOf("😩", "😴"), "tired" to listOf("😩", "😴"), "calor" to listOf("🥵"), "frio" to listOf("🥶"),
         "pensando" to listOf("🤔"), "hmm" to listOf("🤔"), "duda" to listOf("🤔"),
         "feliz" to listOf("😄", "😊"), "happy" to listOf("😄", "😊"), "contento" to listOf("😄", "😊"),
+        "abrazo" to listOf("🤗", "❤"), "hug" to listOf("🤗", "❤"),
         "ayuda" to listOf("🆘", "🙏"), "help" to listOf("🆘", "🙏"), "porfa" to listOf("🙏", "🥺"), "please" to listOf("🙏", "🥺")
     )
 

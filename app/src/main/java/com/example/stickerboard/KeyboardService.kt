@@ -40,6 +40,9 @@ class KeyboardService : InputMethodService() {
 
     private var theme = Themes.all[0]
     private var shift = false
+    private var capsLock = false
+    private var lastShiftTap = 0L
+    private var hapticOn = true
     private var symbols = false
     private var pairIndex = 0
 
@@ -70,6 +73,11 @@ class KeyboardService : InputMethodService() {
             refreshWordBar()
         }
         spell.open()
+        try {
+            @Suppress("DEPRECATION")
+            setBackDisposition(BACK_DISPOSITION_WILL_NOT_DISMISS)
+        } catch (_: Exception) {
+        }
         theme = Themes.all[prefs.getInt("theme", 0).coerceIn(0, Themes.all.lastIndex)]
         pairIndex = prefs.getInt("pair", 0).coerceIn(0, translator.pairs.lastIndex)
     }
@@ -98,6 +106,7 @@ class KeyboardService : InputMethodService() {
     override fun onStartInputView(info: EditorInfo?, restarting: Boolean) {
         super.onStartInputView(info, restarting)
         shift = false
+        capsLock = false
         symbols = false
         lastCorrection = null
         spellCache.clear()
@@ -137,6 +146,7 @@ class KeyboardService : InputMethodService() {
     private fun readSettings() {
         predictiveOn = prefs.getBoolean("predictive", true)
         autocorrectOn = prefs.getBoolean("autocorrect", true)
+        hapticOn = prefs.getBoolean("haptic", true)
     }
 
     /** No se predice, corrige ni aprende en contraseñas, correos o direcciones web. */
@@ -230,8 +240,14 @@ class KeyboardService : InputMethodService() {
             r.addView(spacer(0.25f)); rows[1].forEach { r.addView(charKey(it)) }; r.addView(spacer(0.25f))
         })
         keys.addView(row(h) { r ->
-            val shiftKey = key(if (symbols) "=\\<" else if (shift) "⇧" else "⇪", 1.4f, special = true) {
-                if (!symbols) { shift = !shift; renderKeys() }
+            val shiftLabel = when {
+                symbols -> "=\\<"
+                capsLock -> "⇪"   // mayúsculas fijas
+                shift -> "⬆"      // una sola mayúscula
+                else -> "⇧"
+            }
+            val shiftKey = key(shiftLabel, 1.4f, special = true, accent = !symbols && (shift || capsLock)) {
+                if (!symbols) onShiftTap()
             }
             r.addView(shiftKey)
             rows[2].forEach { r.addView(charKey(it)) }
@@ -254,6 +270,22 @@ class KeyboardService : InputMethodService() {
 
     private fun spacer(w: Float) = View(this).apply { layoutParams = LinearLayout.LayoutParams(0, -1, w) }
 
+    /** Un toque: una mayúscula. Doble toque: mayúsculas fijas. Con las fijas activas, un toque las quita. */
+    private fun onShiftTap() {
+        val now = System.currentTimeMillis()
+        when {
+            capsLock -> { capsLock = false; shift = false }
+            now - lastShiftTap < 350 -> { capsLock = true; shift = true }
+            else -> shift = !shift
+        }
+        lastShiftTap = now
+        renderKeys()
+    }
+
+    private fun buzz(v: View) {
+        if (hapticOn) v.performHapticFeedback(android.view.HapticFeedbackConstants.KEYBOARD_TAP)
+    }
+
     private fun charKey(c: Char): View {
         val label = if (shift && !symbols) c.uppercaseChar().toString() else c.toString()
         return key(label, 1f) { type(label) }
@@ -268,6 +300,10 @@ class KeyboardService : InputMethodService() {
         setTextColor(if (accent) Color.WHITE else theme.keyText)
         background = round(if (accent) theme.accent else if (special) theme.special else theme.key, 8)
         layoutParams = LinearLayout.LayoutParams(0, -1, weight).apply { setMargins(dp(2), dp(3), dp(2), dp(3)) }
+        setOnTouchListener { v, e ->
+            if (e.action == MotionEvent.ACTION_DOWN) buzz(v)
+            false
+        }
         setOnClickListener { onClick() }
     }
 
@@ -282,6 +318,7 @@ class KeyboardService : InputMethodService() {
         k.setOnTouchListener { _, e ->
             when (e.action) {
                 MotionEvent.ACTION_DOWN -> {
+                    buzz(k)
                     // Borrar justo después de una autocorrección devuelve la palabra original
                     if (!revertCorrection()) {
                         lastCorrection = null
@@ -324,7 +361,7 @@ class KeyboardService : InputMethodService() {
     private fun type(s: String) {
         currentInputConnection?.commitText(s, 1)
         lastCorrection = null
-        if (shift && !symbols) { shift = false; renderKeys() }
+        if (shift && !capsLock && !symbols) { shift = false; renderKeys() }
         afterChange()
     }
 

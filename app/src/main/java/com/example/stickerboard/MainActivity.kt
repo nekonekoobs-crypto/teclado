@@ -74,6 +74,11 @@ class MainActivity : ComponentActivity() {
             isChecked = prefs.getBoolean("autocorrect", true)
             setOnCheckedChangeListener { _, checked -> prefs.edit().putBoolean("autocorrect", checked).apply() }
         })
+        col.addView(CheckBox(this).apply {
+            text = "Vibración ligera al tocar las teclas"
+            isChecked = prefs.getBoolean("haptic", true)
+            setOnCheckedChangeListener { _, checked -> prefs.edit().putBoolean("haptic", checked).apply() }
+        })
         button("Borrar palabras aprendidas") {
             WordPredictor.get(this).clearLearned()
             toast("Palabras aprendidas borradas")

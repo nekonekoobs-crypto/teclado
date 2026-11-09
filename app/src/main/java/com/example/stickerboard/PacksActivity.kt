@@ -10,10 +10,8 @@ import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
-import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.result.contract.ActivityResultContracts
-import java.io.File
 
 /**
  * Lista los paquetes con sus stickers y el nombre de cada uno. Tocar un sticker abre la imagen y
@@ -23,17 +21,14 @@ class PacksActivity : ComponentActivity() {
 
     private lateinit var repo: StickerRepository
     private lateinit var list: LinearLayout
-    private var progress: TextView? = null
     private var targetPack: Pack? = null
-    private var busy = false
 
     private val pickImages = registerForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
         val pack = targetPack
         targetPack = null
         if (pack == null || uris.isEmpty()) return@registerForActivityResult
         val files = repo.addStickers(pack.dir, uris)
-        render()
-        nameFiles(files) // al agregar, se analiza la imagen y se le pone nombre
+        if (files.isNotEmpty()) startActivity(QuickNameActivity.intentFor(this, files)) // nombrar lo recién agregado
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -63,8 +58,6 @@ class PacksActivity : ComponentActivity() {
             alpha = 0.7f
             setPadding(0, 8, 0, 8)
         })
-        progress = TextView(this).apply { textSize = 14f }
-        list.addView(progress)
 
         val packs = repo.packs()
         if (packs.isEmpty()) {
@@ -76,11 +69,11 @@ class PacksActivity : ComponentActivity() {
             return
         }
 
-        val unnamed = packs.flatMap { it.stickers }.filter { it.label.isBlank() }
-        if (unnamed.isNotEmpty()) {
+        val unnamed = packs.flatMap { it.stickers }.count { it.label.isBlank() }
+        if (unnamed > 0) {
             list.addView(Button(this).apply {
-                text = "Nombrar automáticamente (${unnamed.size} sin nombre)"
-                setOnClickListener { nameFiles(unnamed.map { it.file }) }
+                text = "Nombrado rápido ($unnamed sin nombre)"
+                setOnClickListener { startActivity(QuickNameActivity.intentFor(this@PacksActivity)) }
             })
         }
 
@@ -136,21 +129,6 @@ class PacksActivity : ComponentActivity() {
         }
     }
 
-    // ---------- Nombrar ----------
-
-    private fun nameFiles(files: List<File>) {
-        if (files.isEmpty() || busy) return
-        busy = true
-        StickerLabeler.nameAll(
-            repo, files,
-            onProgress = { done, total -> progress?.text = "Analizando imágenes… $done de $total" },
-            onDone = {
-                busy = false
-                render()
-            }
-        )
-    }
-
     private fun editSticker(s: Sticker) {
         val box = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -173,19 +151,6 @@ class PacksActivity : ComponentActivity() {
             setSingleLine()
         }
         box.addView(input)
-        val auto = Button(this)
-        auto.text = "Sugerir nombre automático"
-        auto.setOnClickListener {
-            auto.isEnabled = false
-            auto.text = "Analizando…"
-            StickerLabeler.suggest(s.file) { label ->
-                auto.isEnabled = true
-                auto.text = "Sugerir nombre automático"
-                if (label.isNotBlank()) input.setText(label)
-                else Toast.makeText(this, "No pude reconocer la imagen; escribe el nombre", Toast.LENGTH_SHORT).show()
-            }
-        }
-        box.addView(auto)
 
         AlertDialog.Builder(this)
             .setTitle("Editar nombre")
