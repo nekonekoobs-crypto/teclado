@@ -92,6 +92,12 @@ El APK queda en la sección Releases. Instálalo encima de la versión anterior:
 
 ## Nombres de stickers
 
-- En **Ver mis paquetes**, cada sticker muestra su nombre. Tócalo para ver la imagen grande y editar el nombre (estado de ánimo o acción, separado por comas: `feliz, abrazo`).
-- Los nombres se guardan en `labels.json` dentro de cada paquete. El teclado los usa para sugerir el sticker: coincide con lo que escribes aunque falten acentos y reconoce palabras equivalentes (por ejemplo, un sticker llamado "feliz" también aparece al escribir "contento").
-- **Nombrado automático:** al agregar stickers con "+ Agregar", y con el botón "Nombrar automáticamente" para los que no tienen nombre, la app analiza la imagen en el teléfono (ML Kit) y propone un nombre en español. Reconoce objetos y expresiones generales; con dibujos o personajes animados suele dar nombres poco precisos, así que conviene revisarlos. La traducción al español necesita internet la primera vez.
+- En **Ver mis paquetes**, cada sticker muestra su nombre. Tócalo para ver la imagen grande y editarlo (estado de ánimo o acción, separado por comas: `feliz, abrazo`).
+- **Nombrado rápido:** muestra un sticker a la vez con botones de emociones y acciones (feliz, triste, abrazo, hambre…). Eliges una o varias y pasas al siguiente. Se abre solo al agregar stickers con "+ Agregar" y desde el botón "Nombrado rápido".
+- Los nombres se guardan en `labels.json` dentro de cada paquete. El teclado los usa para sugerir el sticker: coincide aunque falten acentos y reconoce palabras equivalentes (un sticker "feliz" aparece al escribir "contento").
+- Se quitó el nombrado automático por reconocimiento de imágenes: el modelo general no distingue emociones en dibujos y ponía nombres incorrectos.
+
+## Teclado
+
+- **Mayúsculas:** un toque en la flecha de mayúsculas pone una sola; doble toque las deja fijas (⇪); otro toque las quita.
+- **Vibración ligera** al tocar las teclas; se desactiva en la app.
