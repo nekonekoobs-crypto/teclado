@@ -15,6 +15,12 @@ android {
         // Android solo deja actualizar encima si el versionCode es mayor al instalado.
         versionCode = (System.getenv("VERSION_CODE") ?: "1").toInt()
         versionName = System.getenv("VERSION_NAME") ?: "0.1"
+
+        // Solo teléfonos reales (ARM de 64 y 32 bits). Quita las copias para x86 de las librerías
+        // nativas de ML Kit, que son emuladores y pesan decenas de MB.
+        ndk {
+            abiFilters += listOf("arm64-v8a", "armeabi-v7a")
+        }
     }
 
     // La misma clave en cada compilación = la app se actualiza sin desinstalar.
@@ -53,6 +59,4 @@ dependencies {
     implementation("androidx.activity:activity-ktx:1.9.3")
     // Traductor en el dispositivo (los modelos se descargan la primera vez)
     implementation("com.google.mlkit:translate:17.0.3")
-    // Reconoce qué hay en la imagen de un sticker (modelo incluido en la app, sin internet)
-    implementation("com.google.mlkit:image-labeling:17.0.9")
 }
