@@ -41,6 +41,8 @@ class KeyboardService : InputMethodService() {
     private var theme = Themes.all[0]
     private var shift = false
     private var capsLock = false
+    private var insetBottom = 0
+    private var bottomPadPref = 0
     // Sugerencia que se conserva después de enviar el texto, hasta que se envíe el sticker
     private var pendingStickers: List<Sticker> = emptyList()
     private var showPending = false
@@ -99,12 +101,15 @@ class KeyboardService : InputMethodService() {
     override fun onCreateInputView(): View {
         root = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         // Ajuste a barra de navegación / gestos para que no tape las teclas
-        ViewCompat.setOnApplyWindowInsetsListener(root) { v, insets ->
+        ViewCompat.setOnApplyWindowInsetsListener(root) { _, insets ->
             val nav = insets.getInsets(WindowInsetsCompat.Type.navigationBars())
-            v.updatePadding(bottom = nav.bottom + dp(2))
+            val sys = insets.getInsets(WindowInsetsCompat.Type.systemBars())
+            insetBottom = maxOf(nav.bottom, sys.bottom)
+            applyBottomSpace()
             insets
         }
         readSettings()
+        applyBottomSpace()
         buildViews()
         return root
     }
@@ -128,6 +133,7 @@ class KeyboardService : InputMethodService() {
         if (!::root.isInitialized) return
         val before = predictiveOn
         readSettings()
+        applyBottomSpace()
         if (before != predictiveOn || builtPredictive != predictiveOn) buildViews() else renderKeys()
         refreshAll()
     }
@@ -160,6 +166,7 @@ class KeyboardService : InputMethodService() {
         predictiveOn = prefs.getBoolean("predictive", true)
         autocorrectOn = prefs.getBoolean("autocorrect", true)
         hapticOn = prefs.getBoolean("haptic", true)
+        bottomPadPref = prefs.getInt("bottomPad", 0)
     }
 
     /** No se predice, corrige ni aprende en contraseñas, correos o direcciones web. */
@@ -284,6 +291,25 @@ class KeyboardService : InputMethodService() {
     private fun spacer(w: Float) = View(this).apply { layoutParams = LinearLayout.LayoutParams(0, -1, w) }
 
     /** Un toque: una mayúscula. Doble toque: mayúsculas fijas. Con las fijas activas, un toque las quita. */
+    /**
+     * Deja libre la franja de la barra de navegación de Android (la de la flecha de ocultar teclado)
+     * para que no se encime con la fila de abajo. Si el sistema no informa su altura, se calcula
+     * desde los recursos de Android. El ajuste manual de la app tiene prioridad (0 = automático).
+     */
+    private fun applyBottomSpace() {
+        if (!::root.isInitialized) return
+        val bottom = if (bottomPadPref > 0) dp(bottomPadPref) else maxOf(insetBottom, navBarFallback())
+        root.updatePadding(bottom = bottom + dp(2))
+    }
+
+    private fun navBarFallback(): Int {
+        val modeId = resources.getIdentifier("config_navBarInteractionMode", "integer", "android")
+        val mode = if (modeId > 0) resources.getInteger(modeId) else 0 // 0 = tres botones, 2 = gestos
+        if (mode == 2) return 0
+        val hId = resources.getIdentifier("navigation_bar_height", "dimen", "android")
+        return if (hId > 0) resources.getDimensionPixelSize(hId) else 0
+    }
+
     private fun onShiftTap() {
         val now = System.currentTimeMillis()
         when {

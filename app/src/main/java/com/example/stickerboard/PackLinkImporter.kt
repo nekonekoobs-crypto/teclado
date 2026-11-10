@@ -20,7 +20,11 @@ object PackLinkImporter {
         val animated: Int,
         val thumbsOnly: Int,
         val error: String? = null,
-        val log: String = ""
+        val log: String = "",
+        val staticConverted: Int = 0,
+        val animatedOk: Int = 0,
+        val animatedKept: Int = 0,
+        val convertFailed: Int = 0
     )
 
     private data class Thumb(val url: String, val ext: String, val size: Int)
@@ -101,6 +105,10 @@ object PackLinkImporter {
         var animated = 0
         var thumbsOnly = 0
         var saved = 0
+        var staticConverted = 0
+        var animatedOk = 0
+        var animatedKept = 0
+        var convertFailed = 0
 
         val ordered = thumbs.entries.sortedWith(
             compareBy({ it.key.substringBefore('-').toInt() }, { it.key })
@@ -129,15 +137,21 @@ object PackLinkImporter {
             }
             if (data == null || kind == null) continue
 
-            File(dir, "sticker_$stem.$kind").writeBytes(data)
+            val raw = File(dir, "sticker_$stem.$kind")
+            raw.writeBytes(data)
             saved++
-            if (kind == "gif" || (kind == "webp" && isAnimatedWebp(data))) animated++
+            when (WhatsAppFormat.process(raw)) {
+                WhatsAppFormat.Outcome.STATIC_CONVERTED -> staticConverted++
+                WhatsAppFormat.Outcome.ANIMATED_OK -> { animated++; animatedOk++ }
+                WhatsAppFormat.Outcome.ANIMATED_NOT_COMPLIANT -> { animated++; animatedKept++ }
+                WhatsAppFormat.Outcome.FAILED -> convertFailed++
+            }
         }
         if (saved == 0) {
             dir.deleteRecursively()
             return fail("Encontré ${thumbs.size} stickers pero no pude descargar ninguna imagen")
         }
-        return Result(saved, animated, thumbsOnly, null, log.toString())
+        return Result(saved, animated, thumbsOnly, null, log.toString(), staticConverted, animatedOk, animatedKept, convertFailed)
     }
 
     /** Identifica la imagen por sus primeros bytes (no confía en el Content-Type del servidor). */

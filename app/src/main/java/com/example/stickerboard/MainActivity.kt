@@ -11,6 +11,7 @@ import android.widget.Button
 import android.widget.CheckBox
 import android.widget.EditText
 import android.widget.LinearLayout
+import android.widget.SeekBar
 import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
@@ -79,6 +80,22 @@ class MainActivity : ComponentActivity() {
             isChecked = prefs.getBoolean("haptic", true)
             setOnCheckedChangeListener { _, checked -> prefs.edit().putBoolean("haptic", checked).apply() }
         })
+        col.addView(TextView(this).apply {
+            text = "Espacio inferior del teclado (0 = automático). Súbelo si la barra de Android tapa la tecla ?123."
+            textSize = 13f
+            setPadding(0, 24, 0, 0)
+        })
+        col.addView(SeekBar(this).apply {
+            max = 64
+            progress = prefs.getInt("bottomPad", 0)
+            setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                override fun onProgressChanged(sb: SeekBar?, p: Int, fromUser: Boolean) {
+                    prefs.edit().putInt("bottomPad", p).apply()
+                }
+                override fun onStartTrackingTouch(sb: SeekBar?) {}
+                override fun onStopTrackingTouch(sb: SeekBar?) {}
+            })
+        })
         button("Borrar palabras aprendidas") {
             WordPredictor.get(this).clearLearned()
             toast("Palabras aprendidas borradas")
@@ -104,8 +121,17 @@ class MainActivity : ComponentActivity() {
                             .setPositiveButton("OK", null)
                             .show()
                     } else {
-                        toast("${r.total} stickers (${r.animated} animados" +
-                            if (r.thumbsOnly > 0) ", ${r.thumbsOnly} solo en miniatura)" else ")")
+                        val sb = StringBuilder("${r.total} stickers descargados.\n")
+                        if (r.staticConverted > 0) sb.append("• ${r.staticConverted} estáticos convertidos a WebP 512×512 (≤100 KB).\n")
+                        if (r.animatedOk > 0) sb.append("• ${r.animatedOk} animados ya cumplen el formato de WhatsApp.\n")
+                        if (r.animatedKept > 0) sb.append("• ${r.animatedKept} animados se guardaron sin cambios: no cumplen el formato de WhatsApp y esta app no puede recomprimir animaciones.\n")
+                        if (r.convertFailed > 0) sb.append("• ${r.convertFailed} no se pudieron convertir y quedaron como estaban.\n")
+                        if (r.thumbsOnly > 0) sb.append("• ${r.thumbsOnly} solo estaban en miniatura (128 px): se ampliaron y se verán borrosos.\n")
+                        AlertDialog.Builder(this)
+                            .setTitle("Paquete descargado")
+                            .setMessage(sb.toString().trim())
+                            .setPositiveButton("OK", null)
+                            .show()
                     }
                     refresh()
                 }
