@@ -586,7 +586,7 @@ class KeyboardService : InputMethodService() {
                 layoutParams = LinearLayout.LayoutParams(dp(52), dp(52))
                 setOnClickListener {
                     val ok = StickerSender.send(this@KeyboardService, currentInputConnection, currentInputEditorInfo, s.file)
-                    if (!ok) Toast.makeText(context, "Esta app no acepta stickers desde el teclado", Toast.LENGTH_SHORT).show()
+                    if (!ok) Toast.makeText(context, StickerSender.lastError.ifEmpty { "No se pudo enviar el sticker" }, Toast.LENGTH_LONG).show()
                     else {
                         pendingStickers = emptyList()
                         showPending = false
