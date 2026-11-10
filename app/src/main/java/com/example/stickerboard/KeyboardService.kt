@@ -41,6 +41,12 @@ class KeyboardService : InputMethodService() {
     private var theme = Themes.all[0]
     private var shift = false
     private var capsLock = false
+    // Sugerencia que se conserva después de enviar el texto, hasta que se envíe el sticker
+    private var pendingStickers: List<Sticker> = emptyList()
+    private var showPending = false
+    private var hadText = false
+    private var lastManualDelete = 0L
+    private var lastFieldKey = ""
     private var lastShiftTap = 0L
     private var hapticOn = true
     private var symbols = false
@@ -111,6 +117,13 @@ class KeyboardService : InputMethodService() {
         lastCorrection = null
         spellCache.clear()
         stickers = repo.all()
+        val fieldKey = "${info?.packageName}/${info?.fieldId}"
+        if (fieldKey != lastFieldKey) {
+            lastFieldKey = fieldKey
+            pendingStickers = emptyList()
+            showPending = false
+            hadText = false
+        }
         readFieldType(info)
         if (!::root.isInitialized) return
         val before = predictiveOn
@@ -319,6 +332,7 @@ class KeyboardService : InputMethodService() {
             when (e.action) {
                 MotionEvent.ACTION_DOWN -> {
                     buzz(k)
+                    lastManualDelete = System.currentTimeMillis()
                     // Borrar justo después de una autocorrección devuelve la palabra original
                     if (!revertCorrection()) {
                         lastCorrection = null
@@ -539,7 +553,21 @@ class KeyboardService : InputMethodService() {
         strip.removeAllViews()
         if (!fieldAllows) return // no se lee el texto de contraseñas, correos ni direcciones
         val before = textBefore(60)
-        val list = suggester.suggest(before, stickers)
+        val after = currentInputConnection?.getTextAfterCursor(1, 0)?.toString().orEmpty()
+        var list = suggester.suggest(before, stickers)
+        if (before.isNotEmpty() || after.isNotEmpty()) {
+            // Hay texto: se recuerdan las sugerencias actuales
+            hadText = true
+            showPending = false
+            pendingStickers = list
+        } else {
+            // El campo quedó vacío. Si había texto y no fui yo quien lo borró, el mensaje se envió:
+            // se siguen mostrando los stickers hasta que se envíe uno.
+            val manual = System.currentTimeMillis() - lastManualDelete < 1500
+            if (hadText && !manual && pendingStickers.isNotEmpty()) showPending = true
+            hadText = false
+            if (showPending) list = pendingStickers
+        }
         if (list.isEmpty()) {
             strip.addView(TextView(this).apply {
                 text = if (stickers.isEmpty()) "Importa paquetes de stickers en la app" else "Escribe para ver stickers…"
@@ -559,6 +587,11 @@ class KeyboardService : InputMethodService() {
                 setOnClickListener {
                     val ok = StickerSender.send(this@KeyboardService, currentInputConnection, currentInputEditorInfo, s.file)
                     if (!ok) Toast.makeText(context, "Esta app no acepta stickers desde el teclado", Toast.LENGTH_SHORT).show()
+                    else {
+                        pendingStickers = emptyList()
+                        showPending = false
+                        refreshSuggestions()
+                    }
                 }
             })
         }
