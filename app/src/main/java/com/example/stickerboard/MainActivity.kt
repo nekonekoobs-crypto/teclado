@@ -129,7 +129,7 @@ class MainActivity : ComponentActivity() {
                         if (r.thumbsOnly > 0) sb.append("• ${r.thumbsOnly} solo estaban en miniatura (128 px): se ampliaron y se verán borrosos.\n")
                         AlertDialog.Builder(this)
                             .setTitle("Paquete descargado")
-                            .setMessage(sb.toString().trim())
+                            .setMessage(sb.toString().trim() + (if (r.log.isNotBlank()) "\n\nDetalle técnico:\n" + r.log.trim() else ""))
                             .setPositiveButton("OK", null)
                             .show()
                     }
