@@ -22,6 +22,10 @@ object WhatsAppFormat {
 
     enum class Outcome { STATIC_CONVERTED, ANIMATED_OK, ANIMATED_NOT_COMPLIANT, FAILED }
 
+    /** Detalle del último animado que no cumple (tamaño y peso reales), para mostrarlo al usuario. */
+    @Volatile
+    var lastKeptDetail: String = ""
+
     private const val SIZE = 512
     private const val MAX_STATIC = 100 * 1024
     private const val MAX_ANIMATED = 500 * 1024
@@ -50,10 +54,41 @@ object WhatsAppFormat {
     }
 
     private fun checkAnimated(file: File): Outcome {
-        if (file.extension.lowercase() != "webp") return Outcome.ANIMATED_NOT_COMPLIANT // gif: no es formato de WhatsApp
-        val (w, h) = webpCanvas(file) ?: return Outcome.ANIMATED_NOT_COMPLIANT
+        if (file.extension.lowercase() != "webp") {
+            lastKeptDetail = "formato ${file.extension.uppercase()} (WhatsApp pide WebP)"
+            return Outcome.ANIMATED_NOT_COMPLIANT
+        }
+        val (w, h) = webpCanvas(file) ?: run {
+            lastKeptDetail = "WebP sin información de tamaño"
+            return Outcome.ANIMATED_NOT_COMPLIANT
+        }
+        forceInfiniteLoop(file)
+        val kb = file.length() / 1024
         return if (w == SIZE && h == SIZE && file.length() <= MAX_ANIMATED) Outcome.ANIMATED_OK
-        else Outcome.ANIMATED_NOT_COMPLIANT
+        else {
+            lastKeptDetail = "$w×$h px y $kb KB; WhatsApp pide 512×512 px y máximo 500 KB"
+            Outcome.ANIMATED_NOT_COMPLIANT
+        }
+    }
+
+    /**
+     * Pone el contador de repeticiones del WebP animado en 0 (bucle infinito), como pide WhatsApp.
+     * Solo cambia 2 bytes de la cabecera; no recomprime nada.
+     */
+    private fun forceInfiniteLoop(file: File) {
+        try {
+            java.io.RandomAccessFile(file, "rw").use { f ->
+                if (f.length() < 44) return
+                val head = ByteArray(44)
+                f.readFully(head)
+                // Tras el bloque VP8X (que termina en el byte 30) debe venir el bloque "ANIM"
+                if (String(head, 30, 4, Charsets.ISO_8859_1) != "ANIM") return
+                f.seek(42)
+                f.write(0)
+                f.write(0)
+            }
+        } catch (_: Exception) {
+        }
     }
 
     /** Lee el tamaño del lienzo de un WebP extendido (bloque VP8X). */
