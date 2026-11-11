@@ -124,7 +124,7 @@ class MainActivity : ComponentActivity() {
                         val sb = StringBuilder("${r.total} stickers descargados.\n")
                         if (r.staticConverted > 0) sb.append("• ${r.staticConverted} estáticos convertidos a WebP 512×512 (≤100 KB).\n")
                         if (r.animatedOk > 0) sb.append("• ${r.animatedOk} animados ya cumplen el formato de WhatsApp.\n")
-                        if (r.animatedKept > 0) sb.append("• ${r.animatedKept} animados se guardaron sin cambios: no cumplen el formato de WhatsApp y esta app no puede recomprimir animaciones.\n")
+                        if (r.animatedKept > 0) sb.append("• ${r.animatedKept} animados se guardaron sin cambios porque no cumplen el formato de WhatsApp (por ejemplo: ${WhatsAppFormat.lastKeptDetail}). Esta app no puede recomprimir animaciones.\n")
                         if (r.convertFailed > 0) sb.append("• ${r.convertFailed} no se pudieron convertir y quedaron como estaban.\n")
                         if (r.thumbsOnly > 0) sb.append("• ${r.thumbsOnly} solo estaban en miniatura (128 px): se ampliaron y se verán borrosos.\n")
                         AlertDialog.Builder(this)
