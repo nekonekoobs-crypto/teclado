@@ -232,7 +232,7 @@ class KeyboardService : InputMethodService() {
 
         keys = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(3), 0, dp(3), dp(4))
+            setPadding(0, 0, 0, 0)
         }
         root.addView(keys, LinearLayout.LayoutParams(-1, -2))
         renderKeys()
@@ -337,8 +337,13 @@ class KeyboardService : InputMethodService() {
         gravity = Gravity.CENTER
         textSize = if (label.length > 2) 14f else 19f
         setTextColor(if (accent) Color.WHITE else theme.keyText)
-        background = round(if (accent) theme.accent else if (special) theme.special else theme.key, 8)
-        layoutParams = LinearLayout.LayoutParams(0, -1, weight).apply { setMargins(dp(2), dp(3), dp(2), dp(3)) }
+        // La separación entre teclas se dibuja dentro de la propia tecla (inset), no como margen:
+        // así toda la superficie, incluida la separación, responde al toque.
+        background = android.graphics.drawable.InsetDrawable(
+            round(if (accent) theme.accent else if (special) theme.special else theme.key, 8),
+            dp(2), dp(3), dp(2), dp(3)
+        )
+        layoutParams = LinearLayout.LayoutParams(0, -1, weight)
         setOnTouchListener { v, e ->
             if (e.action == MotionEvent.ACTION_DOWN) buzz(v)
             false
@@ -614,6 +619,8 @@ class KeyboardService : InputMethodService() {
                     val ok = StickerSender.send(this@KeyboardService, currentInputConnection, currentInputEditorInfo, s.file)
                     if (!ok) Toast.makeText(context, StickerSender.lastError.ifEmpty { "No se pudo enviar el sticker" }, Toast.LENGTH_LONG).show()
                     else {
+                        if (StickerSender.lastNote.isNotEmpty())
+                            Toast.makeText(context, StickerSender.lastNote, Toast.LENGTH_LONG).show()
                         pendingStickers = emptyList()
                         showPending = false
                         refreshSuggestions()
