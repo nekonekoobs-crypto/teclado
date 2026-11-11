@@ -91,6 +91,33 @@ object WhatsAppFormat {
         }
     }
 
+    data class Info(val text: String, val ok: Boolean)
+
+    /** Revisa un archivo y dice si cumple el formato de sticker de WhatsApp (para mostrarlo en la pantalla de paquetes). */
+    fun inspect(file: File): Info {
+        return try {
+            val kb = file.length() / 1024
+            if (file.extension.lowercase() != "webp") {
+                return Info("✗ ${file.extension.uppercase()}: WhatsApp pide WebP", false)
+            }
+            val head = ByteArray(64)
+            val n = file.inputStream().use { it.read(head) }
+            val animated = String(head, 0, maxOf(n, 0), Charsets.ISO_8859_1).contains("ANIM")
+            val dims = if (animated) webpCanvas(file) else {
+                val o = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                android.graphics.BitmapFactory.decodeFile(file.absolutePath, o)
+                if (o.outWidth > 0) o.outWidth to o.outHeight else null
+            }
+            val (w, h) = dims ?: return Info("? no pude leer el archivo", false)
+            val max = if (animated) MAX_ANIMATED else MAX_STATIC
+            val kind = if (animated) "Animado" else "Fijo"
+            if (w == SIZE && h == SIZE && file.length() <= max) Info("✓ $kind · cumple · $kb KB", true)
+            else Info("✗ $kind $w×$h · $kb KB (pide 512×512, ≤${max / 1024} KB)", false)
+        } catch (_: Exception) {
+            Info("? no pude leer el archivo", false)
+        }
+    }
+
     /** Lee el tamaño del lienzo de un WebP extendido (bloque VP8X). */
     private fun webpCanvas(file: File): Pair<Int, Int>? {
         val b = ByteArray(30)
