@@ -94,11 +94,13 @@ object PackLinkImporter {
 
         // 3) Descarga: se busca una variante grande con el primer sticker y se reutiliza para el resto
         val patterns: List<(String, Thumb) -> String> = listOf(
-            { s, t -> "$base/$s.thumb512.${t.ext}" },
-            { s, t -> "$base/$s.thumb256.${t.ext}" },
+            // Primero los originales y los tamaños más grandes; la miniatura de 256 queda de último recurso
             { s, _ -> "$base/$s.webp" },
             { s, _ -> "$base/$s.gif" },
-            { s, _ -> "$base/$s.png" }
+            { s, _ -> "$base/$s.png" },
+            { s, t -> "$base/$s.thumb1024.${t.ext}" },
+            { s, t -> "$base/$s.thumb512.${t.ext}" },
+            { s, t -> "$base/$s.thumb256.${t.ext}" }
         )
         var working: Int? = null
         var noFull = false
@@ -123,7 +125,10 @@ object PackLinkImporter {
                 for (i in order) {
                     val bytes = download(patterns[i](stem, thumb), 8_000_000, true, log, "grande")
                     val k = bytes?.let { imageKind(it) }
-                    if (bytes != null && k != null) { data = bytes; kind = k; full = true; working = i; break }
+                    if (bytes != null && k != null) {
+                        if (working == null) note(log, "versión grande: ${patterns[i](stem, thumb).substringAfterLast('/')}")
+                        data = bytes; kind = k; full = true; working = i; break
+                    }
                 }
                 if (data == null && working == null) {
                     noFull = true
