@@ -20,11 +20,16 @@ object StickerSender {
     @Volatile
     var lastError: String = ""
 
+    /** Aviso para el usuario cuando el sticker se envió distinto al original (por ejemplo, fijo en vez de animado). */
+    @Volatile
+    var lastNote: String = ""
+
     /**
      * Envía el sticker al campo de texto. Si la app no acepta el formato (por ejemplo WebP)
      * o lo rechaza, lo reintenta convertido a PNG (sin animación).
      */
     fun send(context: Context, ic: InputConnection?, info: EditorInfo?, file: File): Boolean {
+        lastNote = ""
         if (ic == null || info == null) {
             lastError = "No hay un campo de texto activo"
             return false
@@ -37,12 +42,24 @@ object StickerSender {
         fun accepts(m: String) = supported.any { ClipDescription.compareMimeTypes(m, it) }
 
         val original = mimeFor(file.name)
+
+        // WhatsApp puede anunciar un tipo propio para stickers WebP. Si está, se usa primero:
+        // así el archivo se entrega como sticker y no como una imagen cualquiera.
+        val waSticker = "image/webp.wasticker"
+        if (original == "image/webp" && supported.any { it.equals(waSticker, ignoreCase = true) }) {
+            if (commit(context, ic, info, file, waSticker)) return true
+            // Si lo rechaza, se sigue con el flujo normal (WebP y luego PNG)
+        }
+
         if (accepts(original)) {
             if (commit(context, ic, info, file, original)) return true
             // La app declaró el formato pero lo rechazó: se prueba con PNG
             if (original != "image/png" && accepts("image/png")) {
                 val png = toPng(context, file)
-                if (png != null && commit(context, ic, info, png, "image/png")) return true
+                if (png != null && commit(context, ic, info, png, "image/png")) {
+                    lastNote = "La app rechazó el WebP; se envió como imagen fija (PNG)"
+                    return true
+                }
             }
             if (lastError.isEmpty()) lastError = "La app rechazó el sticker ($original)"
             return false
@@ -54,7 +71,9 @@ object StickerSender {
                 lastError = "No pude convertir el sticker a PNG"
                 return false
             }
-            return commit(context, ic, info, png, "image/png")
+            val ok = commit(context, ic, info, png, "image/png")
+            if (ok) lastNote = "La app no acepta WebP desde el teclado; se envió como imagen fija (PNG)"
+            return ok
         }
         lastError = "Esta app solo acepta: ${supported.joinToString(", ")}"
         return false
