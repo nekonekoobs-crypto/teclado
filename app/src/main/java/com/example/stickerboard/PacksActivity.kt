@@ -123,6 +123,13 @@ class PacksActivity : ComponentActivity() {
                     gravity = Gravity.CENTER
                     alpha = if (s.label.isBlank()) 0.5f else 1f
                 })
+                val info = WhatsAppFormat.inspect(s.file)
+                item.addView(TextView(this).apply {
+                    text = info.text
+                    textSize = 11f
+                    gravity = Gravity.CENTER
+                    setTextColor(if (info.ok) 0xFF2E7D32.toInt() else 0xFFC62828.toInt())
+                })
                 grid.addView(item)
             }
             list.addView(grid)
@@ -138,6 +145,13 @@ class PacksActivity : ComponentActivity() {
             loadSticker(s.file)
             scaleType = ImageView.ScaleType.FIT_CENTER
             layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(220))
+        })
+        val fmt = WhatsAppFormat.inspect(s.file)
+        box.addView(TextView(this).apply {
+            text = "WhatsApp: ${fmt.text}"
+            textSize = 13f
+            gravity = Gravity.CENTER
+            setTextColor(if (fmt.ok) 0xFF2E7D32.toInt() else 0xFFC62828.toInt())
         })
         box.addView(TextView(this).apply {
             text = "Nombre (estado de ánimo o acción). Separa varias palabras con comas."
