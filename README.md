@@ -101,3 +101,9 @@ El APK queda en la sección Releases. Instálalo encima de la versión anterior:
 
 - **Mayúsculas:** un toque en la flecha de mayúsculas pone una sola; doble toque las deja fijas (⇪); otro toque las quita.
 - **Vibración ligera** al tocar las teclas; se desactiva en la app.
+
+## Panel de stickers, autocompletado y guardado desde chats
+
+- **Botón 🖼️ en el teclado:** abre un panel con la pestaña "⭐ Más usados" (del más al menos enviado) y una pestaña por paquete. Toca un sticker para enviarlo; mantén pulsado para ponerle nombre con los mismos botones del nombrado rápido ("Escribir…" abre la app para un nombre propio). "ABC" vuelve al teclado.
+- **Autocompletado:** la barra de palabras completa lo que escribes, sin importar los acentos (`cafe` → `café`). Lo que más escribes tiene prioridad sobre el vocabulario incluido (unas 800 palabras en español y ~300 en inglés).
+- **Guardar stickers desde otras apps:** en el menú Compartir de otra app aparece "Guardar en StickerBoard". Lo recibido va al paquete "Guardados" y sale en el panel del teclado. Los repetidos se detectan y no se duplican. Un teclado no puede leer los chats de otras apps, así que este es el único camino.
