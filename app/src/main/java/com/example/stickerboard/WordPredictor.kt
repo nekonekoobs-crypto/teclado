@@ -113,11 +113,6 @@ class WordPredictor private constructor(private val context: Context) {
     }
 
     /** Minúsculas y sin acentos: "cafe" completa a "café", "ni" a "niño". */
-    private val markRegex = Regex("\\p{Mn}+")
-    private val foldMemo = object : java.util.LinkedHashMap<String, String>(256, 0.75f, true) {
-        override fun removeEldestEntry(e: MutableMap.MutableEntry<String, String>?) = size > 2000
-    }
-
     private fun fold(s: String): String = foldMemo.getOrPut(s) {
         java.text.Normalizer.normalize(s.lowercase(), java.text.Normalizer.Form.NFD).replace(markRegex, "")
     }
@@ -184,4 +179,10 @@ class WordPredictor private constructor(private val context: Context) {
                 instance ?: WordPredictor(context.applicationContext).also { instance = it }
             }
     }
+}
+
+// A nivel de archivo para que existan antes de crear WordPredictor (su init ya usa fold())
+private val markRegex = Regex("\\p{Mn}+")
+private val foldMemo = object : java.util.LinkedHashMap<String, String>(256, 0.75f, true) {
+    override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, String>?) = size > 2000
 }
