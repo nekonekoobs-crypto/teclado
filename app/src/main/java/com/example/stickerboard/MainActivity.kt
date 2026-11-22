@@ -2,7 +2,10 @@ package com.example.stickerboard
 
 import android.content.Context
 import android.content.Intent
+import android.net.Uri
+import android.os.Build
 import android.os.Bundle
+import android.provider.DocumentsContract
 import android.provider.Settings
 import android.view.Gravity
 import android.view.inputmethod.InputMethodManager
@@ -24,10 +27,37 @@ class MainActivity : ComponentActivity() {
     private lateinit var status: TextView
     private val prefs by lazy { getSharedPreferences("prefs", Context.MODE_PRIVATE) }
 
+    // Imágenes sueltas: van al paquete "Guardados", sin repetirse y ajustadas al formato de WhatsApp
     private val pickImages = registerForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
-        val n = repo.importImages(uris)
-        toast("$n stickers importados")
-        refresh()
+        importPicked(uris)
+    }
+
+    // Igual, pero el selector de archivos se abre en la carpeta donde WhatsApp guarda los stickers recibidos
+    private val pickWhatsApp = registerForActivityResult(OpenAtWhatsAppStickers()) { uris ->
+        importPicked(uris)
+    }
+
+    private fun importPicked(uris: List<Uri>) {
+        if (uris.isEmpty()) return
+        toast("Guardando…")
+        Thread {
+            val (added, duplicates) = try {
+                repo.importShared(uris)
+            } catch (_: Exception) {
+                0 to 0
+            }
+            runOnUiThread {
+                toast(
+                    when {
+                        added > 0 && duplicates > 0 -> "$added nuevos guardados ($duplicates ya estaban)"
+                        added > 0 -> "$added stickers guardados en \"Guardados\""
+                        duplicates > 0 -> "Ya estaban guardados"
+                        else -> "No encontré imágenes compatibles"
+                    }
+                )
+                refresh()
+            }
+        }.start()
     }
 
     private val pickZip = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
@@ -62,6 +92,19 @@ class MainActivity : ComponentActivity() {
         }
         button("Importar paquete (.zip / .wastickers)") { pickZip.launch(arrayOf("*/*")) }
         button("Importar imágenes sueltas") { pickImages.launch(arrayOf("image/*")) }
+        button("Importar stickers recibidos de WhatsApp") {
+            AlertDialog.Builder(this)
+                .setTitle("Stickers recibidos en WhatsApp")
+                .setMessage(
+                    "WhatsApp guarda en tu teléfono los stickers que recibes. Se abrirá el selector de archivos " +
+                        "en esa carpeta. Si no abre ahí, entra a:\n\nAndroid › media › com.whatsapp › WhatsApp › Media › WhatsApp Stickers\n\n" +
+                        "Elige los que quieras guardar (mantén pulsado uno para seleccionar varios). " +
+                        "Los repetidos se omiten. La ruta puede variar según la marca del teléfono."
+                )
+                .setPositiveButton("Abrir") { _, _ -> pickWhatsApp.launch(arrayOf("image/*")) }
+                .setNegativeButton("Cancelar", null)
+                .show()
+        }
 
         button("Ver mis paquetes de stickers") { startActivity(Intent(this, PacksActivity::class.java)) }
 
@@ -147,4 +190,19 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun toast(s: String) = Toast.makeText(this, s, Toast.LENGTH_SHORT).show()
+}
+
+/** Selector de varios archivos que intenta abrirse en la carpeta de stickers de WhatsApp. */
+private class OpenAtWhatsAppStickers : ActivityResultContracts.OpenMultipleDocuments() {
+    override fun createIntent(context: Context, input: Array<String>): Intent {
+        val intent = super.createIntent(context, input)
+        if (Build.VERSION.SDK_INT >= 26) {
+            val start = DocumentsContract.buildDocumentUri(
+                "com.android.externalstorage.documents",
+                "primary:Android/media/com.whatsapp/WhatsApp/Media/WhatsApp Stickers"
+            )
+            intent.putExtra(DocumentsContract.EXTRA_INITIAL_URI, start)
+        }
+        return intent
+    }
 }
