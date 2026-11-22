@@ -63,6 +63,8 @@ object WhatsAppFormat {
             return Outcome.ANIMATED_NOT_COMPLIANT
         }
         forceInfiniteLoop(file)
+        // Si es más chico que 512×512, se amplía el lienzo (sin recomprimir) para que cumpla el formato
+        if (w <= SIZE && h <= SIZE && !(w == SIZE && h == SIZE) && padTo512(file)) return Outcome.ANIMATED_OK
         val kb = file.length() / 1024
         return if (w == SIZE && h == SIZE && file.length() <= MAX_ANIMATED) Outcome.ANIMATED_OK
         else {
@@ -88,6 +90,80 @@ object WhatsAppFormat {
                 f.write(0)
             }
         } catch (_: Exception) {
+        }
+    }
+
+    private val LATIN1 = Charsets.ISO_8859_1
+
+    /** ¿Es un WebP animado más chico que 512×512 que se puede ajustar con padTo512? */
+    fun isPaddable(file: File): Boolean = try {
+        if (file.extension.lowercase() != "webp" || file.length() > MAX_ANIMATED) {
+            false
+        } else {
+            val head = ByteArray(64)
+            val n = file.inputStream().use { it.read(head) }
+            val animated = String(head, 0, maxOf(n, 0), LATIN1).contains("ANIM")
+            val dims = webpCanvas(file)
+            animated && dims != null && dims.first <= SIZE && dims.second <= SIZE &&
+                !(dims.first == SIZE && dims.second == SIZE)
+        }
+    } catch (_: Exception) {
+        false
+    }
+
+    /**
+     * Amplía el lienzo de un WebP animado a 512×512 SIN recomprimir: solo cambia el tamaño del lienzo en la
+     * cabecera y desplaza cada cuadro para dejarlo centrado. El sticker conserva su calidad pero ocupa
+     * menos del recuadro (uno de 200 px queda pequeño dentro de 512). Guarda una copia del original
+     * con la terminación ".orig" y devuelve false si algo no cuadra (no modifica nada en ese caso).
+     */
+    fun padTo512(file: File): Boolean {
+        return try {
+            val bytes = file.readBytes()
+            if (bytes.size < 30 || bytes.size > MAX_ANIMATED) return false
+            if (String(bytes, 0, 4, LATIN1) != "RIFF" || String(bytes, 8, 4, LATIN1) != "WEBP") return false
+            if (String(bytes, 12, 4, LATIN1) != "VP8X") return false
+
+            fun u24(o: Int) = (bytes[o].toInt() and 0xFF) or ((bytes[o + 1].toInt() and 0xFF) shl 8) or ((bytes[o + 2].toInt() and 0xFF) shl 16)
+            fun put24(o: Int, v: Int) {
+                bytes[o] = v.toByte()
+                bytes[o + 1] = (v shr 8).toByte()
+                bytes[o + 2] = (v shr 16).toByte()
+            }
+
+            val w = u24(24) + 1
+            val h = u24(27) + 1
+            if (w > SIZE || h > SIZE || (w == SIZE && h == SIZE)) return false
+            // Los desplazamientos de cuadro en WebP se guardan en pasos de 2 px: el margen debe ser par
+            val padX = ((SIZE - w) / 2) and 1.inv()
+            val padY = ((SIZE - h) / 2) and 1.inv()
+
+            // Primero se comprueba la estructura completa y se ubican los cuadros
+            val frames = ArrayList<Int>()
+            var pos = 12
+            while (pos + 8 <= bytes.size) {
+                val tag = String(bytes, pos, 4, LATIN1)
+                val size = (bytes[pos + 4].toInt() and 0xFF) or ((bytes[pos + 5].toInt() and 0xFF) shl 8) or
+                    ((bytes[pos + 6].toInt() and 0xFF) shl 16) or ((bytes[pos + 7].toInt() and 0xFF) shl 24)
+                if (size < 0 || pos + 8 + size > bytes.size) return false
+                if (tag == "ANMF") frames.add(pos)
+                pos += 8 + size + (size and 1)
+            }
+            if (frames.isEmpty()) return false
+
+            val backup = File(file.parentFile, file.name + ".orig")
+            if (!backup.exists()) file.copyTo(backup)
+
+            put24(24, SIZE - 1)
+            put24(27, SIZE - 1)
+            frames.forEach { p ->
+                put24(p + 8, u24(p + 8) + padX / 2)
+                put24(p + 11, u24(p + 11) + padY / 2)
+            }
+            file.writeBytes(bytes)
+            true
+        } catch (_: Exception) {
+            false
         }
     }
 

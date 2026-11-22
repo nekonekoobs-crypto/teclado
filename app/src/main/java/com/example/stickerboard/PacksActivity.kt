@@ -10,6 +10,7 @@ import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.result.contract.ActivityResultContracts
 
@@ -74,6 +75,23 @@ class PacksActivity : ComponentActivity() {
             list.addView(Button(this).apply {
                 text = "Nombrado rápido ($unnamed sin nombre)"
                 setOnClickListener { startActivity(QuickNameActivity.intentFor(this@PacksActivity)) }
+            })
+        }
+
+        val paddable = packs.flatMap { it.stickers }.filter { WhatsAppFormat.isPaddable(it.file) }
+        if (paddable.isNotEmpty()) {
+            list.addView(Button(this).apply {
+                text = "Ajustar ${paddable.size} animados a 512×512"
+                setOnClickListener {
+                    var fixed = 0
+                    paddable.forEach { if (WhatsAppFormat.padTo512(it.file)) fixed++ }
+                    Toast.makeText(
+                        this@PacksActivity,
+                        "$fixed de ${paddable.size} ajustados (el original se conserva como .orig)",
+                        Toast.LENGTH_LONG
+                    ).show()
+                    render()
+                }
             })
         }
 
