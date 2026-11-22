@@ -107,3 +107,7 @@ El APK queda en la sección Releases. Instálalo encima de la versión anterior:
 - **Botón 🖼️ en el teclado:** abre un panel con la pestaña "⭐ Más usados" (del más al menos enviado) y una pestaña por paquete. Toca un sticker para enviarlo; mantén pulsado para ponerle nombre con los mismos botones del nombrado rápido ("Escribir…" abre la app para un nombre propio). "ABC" vuelve al teclado.
 - **Autocompletado:** la barra de palabras completa lo que escribes, sin importar los acentos (`cafe` → `café`). Lo que más escribes tiene prioridad sobre el vocabulario incluido (unas 800 palabras en español y ~300 en inglés).
 - **Guardar stickers desde otras apps:** en el menú Compartir de otra app aparece "Guardar en StickerBoard". Lo recibido va al paquete "Guardados" y sale en el panel del teclado. Los repetidos se detectan y no se duplican. Un teclado no puede leer los chats de otras apps, así que este es el único camino.
+
+## Stickers recibidos en WhatsApp
+
+El menú de un sticker recibido en WhatsApp (Añadir a Favoritos, Añadir al paquete, Editar, Crear el tuyo) no tiene "Compartir", así que no se puede guardar desde ahí. Pero WhatsApp guarda los recibidos en `Android › media › com.whatsapp › WhatsApp › Media › WhatsApp Stickers`. El botón **Importar stickers recibidos de WhatsApp** abre el selector de archivos en esa carpeta; lo elegido va al paquete "Guardados" (sin repetir y ajustado al formato de WhatsApp). La ruta puede variar según la marca del teléfono.
