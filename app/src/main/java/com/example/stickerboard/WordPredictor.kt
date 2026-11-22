@@ -113,8 +113,14 @@ class WordPredictor private constructor(private val context: Context) {
     }
 
     /** Minúsculas y sin acentos: "cafe" completa a "café", "ni" a "niño". */
-    private fun fold(s: String): String =
-        java.text.Normalizer.normalize(s.lowercase(), java.text.Normalizer.Form.NFD).replace(Regex("\\p{Mn}+"), "")
+    private val markRegex = Regex("\\p{Mn}+")
+    private val foldMemo = object : java.util.LinkedHashMap<String, String>(256, 0.75f, true) {
+        override fun removeEldestEntry(e: MutableMap.MutableEntry<String, String>?) = size > 2000
+    }
+
+    private fun fold(s: String): String = foldMemo.getOrPut(s) {
+        java.text.Normalizer.normalize(s.lowercase(), java.text.Normalizer.Form.NFD).replace(markRegex, "")
+    }
 
     fun complete(prefix: String, limit: Int = 4): List<String> {
         val p = fold(prefix)

@@ -101,6 +101,7 @@ class KeyboardService : InputMethodService() {
 
     override fun onDestroy() {
         handler.removeCallbacksAndMessages(null)
+        libExec.shutdownNow()
         translator.close()
         spell.close()
         predictor.save()
@@ -132,7 +133,7 @@ class KeyboardService : InputMethodService() {
         namingSticker = null
         lastCorrection = null
         spellCache.clear()
-        stickers = repo.all()
+        loadLibrary()
         val fieldKey = "${info?.packageName}/${info?.fieldId}"
         if (fieldKey != lastFieldKey) {
             lastFieldKey = fieldKey
@@ -170,10 +171,7 @@ class KeyboardService : InputMethodService() {
         candidatesStart: Int, candidatesEnd: Int
     ) {
         super.onUpdateSelection(oldSelStart, oldSelEnd, newSelStart, newSelEnd, candidatesStart, candidatesEnd)
-        if (::strip.isInitialized) {
-            refreshSuggestions()
-            refreshWordBar()
-        }
+        if (::strip.isInitialized) scheduleRefresh()
     }
 
     // ---------- Ajustes y tipo de campo ----------
@@ -204,6 +202,7 @@ class KeyboardService : InputMethodService() {
     // ---------- Construcción de la vista ----------
 
     private fun buildViews() {
+        stripKey = ""
         root.removeAllViews()
         root.setBackgroundColor(theme.bg)
         builtPredictive = predictiveOn
@@ -466,9 +465,41 @@ class KeyboardService : InputMethodService() {
         if (!sendDefaultEditorAction(true)) sendDownUpKeyEvents(KeyEvent.KEYCODE_ENTER)
     }
 
+    private var stickers_loadGen = 0
+    private var stripKey = ""
+    private var libraryPacks: List<Pack> = emptyList()
+    private val libExec = java.util.concurrent.Executors.newSingleThreadExecutor()
+    private val refreshRunnable = Runnable { refreshSuggestions(); refreshWordBar() }
+
+    /** Junta varios refrescos seguidos (teclazo + cambio de selección) en uno solo. */
+    private fun scheduleRefresh() {
+        handler.removeCallbacks(refreshRunnable)
+        handler.post(refreshRunnable)
+    }
+
+    /** Lee los paquetes en segundo plano; al terminar actualiza sugerencias y panel. */
+    private fun loadLibrary() {
+        val gen = ++stickers_loadGen
+        libExec.execute {
+            try {
+                val p = repo.packs()
+                val all = p.flatMap { it.stickers }
+                suggester.prepare(all)
+                handler.post {
+                    if (gen != stickers_loadGen) return@post
+                    libraryPacks = p
+                    stickers = all
+                    stripKey = ""
+                    refreshSuggestions()
+                    if (panelOpen && namingSticker == null) renderPanel()
+                }
+            } catch (_: Throwable) {
+            }
+        }
+    }
+
     private fun afterChange() {
-        refreshSuggestions()
-        refreshWordBar()
+        scheduleRefresh()
         scheduleSpell()
     }
 
@@ -605,8 +636,9 @@ class KeyboardService : InputMethodService() {
 
     private fun refreshSuggestions() {
         if (!::strip.isInitialized) return
-        strip.removeAllViews()
-        if (!fieldAllows) return // no se lee el texto de contraseñas, correos ni direcciones
+        if (!fieldAllows) { // no se lee el texto de contraseñas, correos ni direcciones
+            strip.removeAllViews(); stripKey = ""; return
+        }
         val before = textBefore(60)
         val after = currentInputConnection?.getTextAfterCursor(1, 0)?.toString().orEmpty()
         var list = suggester.suggest(before, stickers)
@@ -623,6 +655,10 @@ class KeyboardService : InputMethodService() {
             hadText = false
             if (showPending) list = pendingStickers
         }
+        val newKey = list.joinToString("|") { it.file.path } + "#" + stickers.isEmpty() + "#" + theme.keyText
+        if (newKey == stripKey) return // nada cambió: no se reconstruye la tira
+        stripKey = newKey
+        strip.removeAllViews()
         if (list.isEmpty()) {
             strip.addView(TextView(this).apply {
                 text = if (stickers.isEmpty()) "Importa paquetes de stickers en la app" else "Escribe para ver stickers…"
@@ -635,7 +671,7 @@ class KeyboardService : InputMethodService() {
         }
         list.forEach { s ->
             strip.addView(ImageView(this).apply {
-                loadSticker(s.file)
+                loadThumb(s.file, 160)
                 scaleType = ImageView.ScaleType.FIT_CENTER
                 setPadding(dp(4), dp(4), dp(4), dp(4))
                 layoutParams = LinearLayout.LayoutParams(dp(52), dp(52))
@@ -651,7 +687,7 @@ class KeyboardService : InputMethodService() {
     private fun toggleStickerPanel() {
         panelOpen = !panelOpen
         namingSticker = null
-        if (panelOpen) stickers = repo.all()
+        if (panelOpen) loadLibrary()
         updatePanel()
     }
 
@@ -671,7 +707,7 @@ class KeyboardService : InputMethodService() {
             return
         }
 
-        val packs = repo.packs()
+        val packs = libraryPacks
         if (panelTab != TAB_TOP && packs.none { it.dir.name == panelTab }) panelTab = TAB_TOP
 
         // Pestañas: más usados + un paquete por pestaña
@@ -751,7 +787,7 @@ class KeyboardService : InputMethodService() {
         layoutParams = GridLayout.LayoutParams().apply { width = cell }
         setPadding(dp(2), dp(4), dp(2), dp(4))
         addView(ImageView(context).apply {
-            loadSticker(s.file)
+            loadThumb(s.file, 200)
             scaleType = ImageView.ScaleType.FIT_CENTER
             layoutParams = LinearLayout.LayoutParams(cell - dp(16), cell - dp(16))
         })
@@ -847,7 +883,7 @@ class KeyboardService : InputMethodService() {
     private fun saveNaming(s: Sticker) {
         val label = (namingSelected.toList() + namingExtra).distinct().joinToString(", ")
         repo.setLabel(s.file, label)
-        stickers = repo.all()
+        loadLibrary()
         namingSticker = null
         renderPanel()
         refreshSuggestions()

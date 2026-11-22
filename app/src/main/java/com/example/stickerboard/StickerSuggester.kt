@@ -48,10 +48,22 @@ class StickerSuggester {
         return out
     }
 
+    private val tokenSplit = Regex("[^\\p{L}\\p{N}\\p{So}\\p{Sk}\\uFE0F]+")
+    private val marks = Regex("\\p{Mn}+")
+
+    /** Etiquetas ya normalizadas por sticker, calculadas una vez (en segundo plano) y no en cada tecla. */
+    @Volatile private var normTags: java.util.IdentityHashMap<Sticker, Set<String>> = java.util.IdentityHashMap()
+
+    fun prepare(stickers: List<Sticker>) {
+        val m = java.util.IdentityHashMap<Sticker, Set<String>>()
+        stickers.forEach { st -> m[st] = st.tags.map { normalize(it) }.toSet() }
+        normTags = m
+    }
+
     fun suggest(textBeforeCursor: String, stickers: List<Sticker>, limit: Int = 12): List<Sticker> {
         if (stickers.isEmpty()) return emptyList()
         val tokens = textBeforeCursor.lowercase().takeLast(60)
-            .split(Regex("[^\\p{L}\\p{N}\\p{So}\\p{Sk}\\uFE0F]+"))
+            .split(tokenSplit)
             .filter { it.isNotBlank() }.takeLast(4)
 
         val wanted = linkedMapOf<String, Int>() // etiqueta -> peso (más reciente = más peso)
@@ -71,7 +83,7 @@ class StickerSuggester {
         if (wanted.isEmpty()) return emptyList()
 
         return stickers
-            .map { s -> s to s.tags.sumOf { wanted[normalize(it)] ?: 0 } }
+            .map { s -> s to (normTags[s] ?: s.tags.map { normalize(it) }.toSet()).sumOf { wanted[it] ?: 0 } }
             .filter { it.second > 0 }
             .sortedByDescending { it.second }
             .take(limit)
@@ -81,5 +93,5 @@ class StickerSuggester {
     /** Minúsculas y sin acentos, para que "cumpleanos" coincida con "cumpleaños". */
     private fun normalize(s: String): String =
         java.text.Normalizer.normalize(s.lowercase(), java.text.Normalizer.Form.NFD)
-            .replace(Regex("\\p{Mn}+"), "")
+            .replace(marks, "")
 }
