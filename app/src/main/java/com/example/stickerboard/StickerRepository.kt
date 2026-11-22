@@ -104,6 +104,87 @@ class StickerRepository(private val context: Context) {
         return d
     }
 
+    // ---------- Más usados ----------
+
+    private fun usageFile() = File(context.filesDir, "usage.json")
+
+    private fun usageKey(f: File) = "${f.parentFile?.name}/${f.name}"
+
+    private fun readUsage(): MutableMap<String, Int> {
+        val f = usageFile()
+        if (!f.exists()) return mutableMapOf()
+        return try {
+            val obj = JSONObject(f.readText())
+            obj.keys().asSequence().associateWithTo(mutableMapOf<String, Int>()) { obj.getInt(it) }
+        } catch (_: Exception) {
+            mutableMapOf()
+        }
+    }
+
+    /** Suma un uso al sticker (se llama cada vez que se envía desde el teclado). */
+    @Synchronized
+    fun recordUse(file: File) {
+        try {
+            val map = readUsage()
+            map[usageKey(file)] = (map[usageKey(file)] ?: 0) + 1
+            val obj = JSONObject()
+            map.forEach { (k, v) -> obj.put(k, v) }
+            usageFile().writeText(obj.toString())
+        } catch (_: Exception) {
+        }
+    }
+
+    /** Stickers enviados al menos una vez, del más al menos usado. */
+    fun topUsed(from: List<Sticker>, limit: Int = 60): List<Sticker> {
+        val usage = readUsage()
+        return from.filter { (usage[usageKey(it.file)] ?: 0) > 0 }
+            .sortedByDescending { usage[usageKey(it.file)] ?: 0 }
+            .take(limit)
+    }
+
+    // ---------- Guardar stickers recibidos desde otras apps (Compartir) ----------
+
+    /** Guarda imágenes compartidas en el paquete "Guardados". Devuelve (nuevas, repetidas). */
+    fun importShared(uris: List<Uri>): Pair<Int, Int> {
+        val dir = File(root, "guardados").also { it.mkdirs() }
+        val nameFile = File(dir, "name.txt")
+        if (!nameFile.exists()) nameFile.writeText("Guardados")
+        var added = 0
+        var duplicates = 0
+        for (uri in uris) {
+            val bytes = (try {
+                context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
+            } catch (_: Exception) {
+                null
+            }) ?: continue
+            if (bytes.size > 10_000_000) continue
+            val ext = sniffExtension(bytes) ?: continue
+            val hash = java.security.MessageDigest.getInstance("SHA-1").digest(bytes)
+                .joinToString("") { "%02x".format(it) }.take(12)
+            val base = "guardado_$hash"
+            if (dir.listFiles()?.any { it.nameWithoutExtension == base } == true) {
+                duplicates++
+                continue
+            }
+            val f = File(dir, "$base.$ext")
+            f.writeBytes(bytes)
+            WhatsAppFormat.process(f) // ajusta a 512x512 si es fijo; los animados se dejan como vienen
+            added++
+        }
+        return added to duplicates
+    }
+
+    private fun sniffExtension(b: ByteArray): String? {
+        if (b.size < 12) return null
+        if (b[0] == 0x89.toByte() && b[1] == 'P'.code.toByte() && b[2] == 'N'.code.toByte() && b[3] == 'G'.code.toByte()) return "png"
+        if (b[0] == 'G'.code.toByte() && b[1] == 'I'.code.toByte() && b[2] == 'F'.code.toByte()) return "gif"
+        if (b[0] == 0xFF.toByte() && b[1] == 0xD8.toByte()) return "jpg"
+        if (b[0] == 'R'.code.toByte() && b[1] == 'I'.code.toByte() && b[2] == 'F'.code.toByte() && b[3] == 'F'.code.toByte() &&
+            b[8] == 'W'.code.toByte() && b[9] == 'E'.code.toByte() && b[10] == 'B'.code.toByte() && b[11] == 'P'.code.toByte()
+        ) return "webp"
+        return null
+    }
+
     fun createPackDir(name: String): File =
         File(root, name.replace(Regex("[^\\p{L}\\p{N}_-]"), "_") + "_" + System.currentTimeMillis())
             .also { it.mkdirs() }

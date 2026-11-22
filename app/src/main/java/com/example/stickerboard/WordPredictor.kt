@@ -12,6 +12,8 @@ class WordPredictor private constructor(private val context: Context) {
 
     private val es = ArrayList<String>()
     private val en = ArrayList<String>()
+    private val esFold = ArrayList<String>()
+    private val enFold = ArrayList<String>()
     private val vocab = HashSet<String>()
     private val learned = HashMap<String, Int>()
     private val bigrams = HashMap<String, HashMap<String, Int>>()
@@ -23,6 +25,8 @@ class WordPredictor private constructor(private val context: Context) {
         loadVocab("words_en.txt", en)
         vocab.addAll(es)
         vocab.addAll(en)
+        es.forEach { esFold.add(fold(it)) }
+        en.forEach { enFold.add(fold(it)) }
         loadLearned()
     }
 
@@ -108,18 +112,24 @@ class WordPredictor private constructor(private val context: Context) {
         if (++unsaved >= 25) save()
     }
 
+    /** Minúsculas y sin acentos: "cafe" completa a "café", "ni" a "niño". */
+    private fun fold(s: String): String =
+        java.text.Normalizer.normalize(s.lowercase(), java.text.Normalizer.Form.NFD).replace(Regex("\\p{Mn}+"), "")
+
     fun complete(prefix: String, limit: Int = 4): List<String> {
-        val p = prefix.lowercase()
+        val p = fold(prefix)
+        if (p.isEmpty()) return emptyList()
         val scores = HashMap<String, Int>()
-        fun consider(w: String, s: Int) {
-            if (w.length > p.length && w.startsWith(p)) {
+        fun consider(w: String, folded: String, s: Int) {
+            if (folded.length > p.length && folded.startsWith(p)) {
                 val old = scores[w]
                 if (old == null || s > old) scores[w] = s
             }
         }
-        es.forEachIndexed { i, w -> consider(w, 1000 - i) }
-        en.forEachIndexed { i, w -> consider(w, 900 - i) }
-        learned.forEach { (w, c) -> if (c >= 2) consider(w, 1100 + c) }
+        // Lo que más escribes tiene prioridad sobre el vocabulario incluido
+        learned.forEach { (w, c) -> if (c >= 2) consider(w, fold(w), 1100 + c) }
+        es.forEachIndexed { i, w -> consider(w, esFold[i], 1000 - i) }
+        en.forEachIndexed { i, w -> consider(w, enFold[i], 900 - i) }
         return scores.entries.sortedByDescending { it.value }.take(limit).map { it.key }
     }
 

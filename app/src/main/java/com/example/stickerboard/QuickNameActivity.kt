@@ -31,11 +31,7 @@ class QuickNameActivity : ComponentActivity() {
     private lateinit var custom: EditText
 
     // Palabras que el teclado ya sabe relacionar con emojis (ver StickerSuggester)
-    private val options = listOf(
-        "feliz", "risa", "amor", "beso", "abrazo", "gracias", "hola", "adiós", "ok", "sí", "no",
-        "triste", "llorar", "enojado", "susto", "pena", "wow", "pensando", "cansado", "sueño",
-        "hambre", "fiesta", "cumpleaños", "calor", "frío", "ayuda", "porfa"
-    )
+    private val options = NameOptions.list
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)

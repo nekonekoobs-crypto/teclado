@@ -14,7 +14,10 @@ import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.View
 import android.view.inputmethod.EditorInfo
+import android.content.Intent
+import android.widget.GridLayout
 import android.widget.HorizontalScrollView
+import android.widget.ScrollView
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.TextView
@@ -53,6 +56,11 @@ class KeyboardService : InputMethodService() {
     private var hapticOn = true
     private var symbols = false
     private var pairIndex = 0
+    private var panelOpen = false
+    private var panelTab = TAB_TOP
+    private var namingSticker: Sticker? = null
+    private var namingExtra: List<String> = emptyList()
+    private val namingSelected = linkedSetOf<String>()
 
     private var predictiveOn = true
     private var autocorrectOn = true
@@ -68,6 +76,7 @@ class KeyboardService : InputMethodService() {
     private lateinit var strip: LinearLayout
     private lateinit var translateBar: LinearLayout
     private lateinit var keys: LinearLayout
+    private lateinit var panel: LinearLayout
     private lateinit var pairButton: TextView
 
     override fun onCreate() {
@@ -119,6 +128,8 @@ class KeyboardService : InputMethodService() {
         shift = false
         capsLock = false
         symbols = false
+        panelOpen = false
+        namingSticker = null
         lastCorrection = null
         spellCache.clear()
         stickers = repo.all()
@@ -135,6 +146,7 @@ class KeyboardService : InputMethodService() {
         readSettings()
         applyBottomSpace()
         if (before != predictiveOn || builtPredictive != predictiveOn) buildViews() else renderKeys()
+        updatePanel()
         refreshAll()
     }
 
@@ -146,7 +158,11 @@ class KeyboardService : InputMethodService() {
 
     override fun onConfigurationChanged(newConfig: Configuration) {
         super.onConfigurationChanged(newConfig)
-        if (::root.isInitialized) renderKeys() // vuelve a calcular alturas (giro, plegable, ventana dividida)
+        if (::root.isInitialized) {
+            renderKeys() // vuelve a calcular alturas (giro, plegable, ventana dividida)
+            panel.layoutParams = panel.layoutParams.apply { height = panelHeight() }
+            updatePanel()
+        }
     }
 
     override fun onUpdateSelection(
@@ -211,6 +227,7 @@ class KeyboardService : InputMethodService() {
         }
         scroll.addView(strip)
         top.addView(scroll, LinearLayout.LayoutParams(0, dp(52), 1f))
+        top.addView(iconButton("🖼️") { toggleStickerPanel() }, LinearLayout.LayoutParams(dp(44), dp(44)))
         top.addView(iconButton("🌐") { toggleTranslate() }, LinearLayout.LayoutParams(dp(44), dp(44)))
         top.addView(iconButton("🎨") { nextTheme() }, LinearLayout.LayoutParams(dp(44), dp(44)))
         root.addView(top, LinearLayout.LayoutParams(-1, dp(52)))
@@ -236,6 +253,13 @@ class KeyboardService : InputMethodService() {
         }
         root.addView(keys, LinearLayout.LayoutParams(-1, -2))
         renderKeys()
+
+        panel = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            visibility = View.GONE
+        }
+        root.addView(panel, LinearLayout.LayoutParams(-1, panelHeight()))
+        updatePanel()
     }
 
     private fun keyHeight(): Int {
@@ -615,19 +639,244 @@ class KeyboardService : InputMethodService() {
                 scaleType = ImageView.ScaleType.FIT_CENTER
                 setPadding(dp(4), dp(4), dp(4), dp(4))
                 layoutParams = LinearLayout.LayoutParams(dp(52), dp(52))
+                setOnClickListener { sendSticker(s) }
+            })
+        }
+    }
+
+    // ---------- Panel de stickers ----------
+
+    private fun panelHeight(): Int = maxOf(keyHeight() * 4, dp(240))
+
+    private fun toggleStickerPanel() {
+        panelOpen = !panelOpen
+        namingSticker = null
+        if (panelOpen) stickers = repo.all()
+        updatePanel()
+    }
+
+    private fun updatePanel() {
+        if (!::panel.isInitialized) return
+        keys.visibility = if (panelOpen) View.GONE else View.VISIBLE
+        panel.visibility = if (panelOpen) View.VISIBLE else View.GONE
+        if (panelOpen) renderPanel()
+    }
+
+    private fun renderPanel() {
+        panel.removeAllViews()
+        panel.setBackgroundColor(theme.bg)
+        val naming = namingSticker
+        if (naming != null) {
+            renderNaming(naming)
+            return
+        }
+
+        val packs = repo.packs()
+        if (panelTab != TAB_TOP && packs.none { it.dir.name == panelTab }) panelTab = TAB_TOP
+
+        // Pestañas: más usados + un paquete por pestaña
+        val tabs = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        fun addTab(id: String, label: String) {
+            val on = panelTab == id
+            tabs.addView(TextView(this).apply {
+                text = label
+                textSize = 14f
+                maxLines = 1
+                gravity = Gravity.CENTER
+                setPadding(dp(12), 0, dp(12), 0)
+                setTextColor(if (on) Color.WHITE else theme.keyText)
+                background = round(if (on) theme.accent else theme.key, 14)
+                layoutParams = LinearLayout.LayoutParams(-2, dp(34)).apply { setMargins(dp(3), 0, dp(3), 0) }
                 setOnClickListener {
-                    val ok = StickerSender.send(this@KeyboardService, currentInputConnection, currentInputEditorInfo, s.file)
-                    if (!ok) Toast.makeText(context, StickerSender.lastError.ifEmpty { "No se pudo enviar el sticker" }, Toast.LENGTH_LONG).show()
-                    else {
-                        if (StickerSender.lastNote.isNotEmpty())
-                            Toast.makeText(context, StickerSender.lastNote, Toast.LENGTH_LONG).show()
-                        pendingStickers = emptyList()
-                        showPending = false
-                        refreshSuggestions()
-                    }
+                    panelTab = id
+                    renderPanel()
                 }
             })
         }
+        addTab(TAB_TOP, "⭐ Más usados")
+        packs.forEach { addTab(it.dir.name, it.name.take(16)) }
+        val tabScroll = HorizontalScrollView(this).apply {
+            isHorizontalScrollBarEnabled = false
+            addView(tabs)
+        }
+        panel.addView(tabScroll, LinearLayout.LayoutParams(-1, dp(42)))
+
+        val list: List<Sticker> =
+            if (panelTab == TAB_TOP) repo.topUsed(packs.flatMap { it.stickers })
+            else packs.firstOrNull { it.dir.name == panelTab }?.stickers.orEmpty()
+
+        val scroll = ScrollView(this)
+        if (list.isEmpty()) {
+            scroll.addView(TextView(this).apply {
+                text = if (panelTab == TAB_TOP) "Aún no has enviado stickers.\nLos que uses aparecerán aquí, del más al menos usado."
+                else "Este paquete no tiene stickers."
+                textSize = 14f
+                gravity = Gravity.CENTER
+                setTextColor(theme.keyText)
+                alpha = 0.7f
+                setPadding(dp(16), dp(32), dp(16), dp(16))
+            })
+        } else {
+            val cell = resources.displayMetrics.widthPixels / 4
+            val grid = GridLayout(this).apply { columnCount = 4 }
+            list.forEach { grid.addView(stickerCell(it, cell)) }
+            scroll.addView(grid)
+        }
+        panel.addView(scroll, LinearLayout.LayoutParams(-1, 0, 1f))
+
+        val bottom = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        bottom.addView(
+            labelButton("ABC") { toggleStickerPanel() },
+            LinearLayout.LayoutParams(dp(72), dp(40)).apply { setMargins(dp(6), dp(3), dp(6), dp(3)) }
+        )
+        bottom.addView(TextView(this).apply {
+            text = "Toca para enviar · mantén pulsado para ponerle nombre"
+            textSize = 12f
+            maxLines = 2
+            setTextColor(theme.keyText)
+            alpha = 0.7f
+        }, LinearLayout.LayoutParams(0, -2, 1f))
+        panel.addView(bottom, LinearLayout.LayoutParams(-1, dp(46)))
+    }
+
+    private fun stickerCell(s: Sticker, cell: Int): View = LinearLayout(this).apply {
+        orientation = LinearLayout.VERTICAL
+        gravity = Gravity.CENTER_HORIZONTAL
+        layoutParams = GridLayout.LayoutParams().apply { width = cell }
+        setPadding(dp(2), dp(4), dp(2), dp(4))
+        addView(ImageView(context).apply {
+            loadSticker(s.file)
+            scaleType = ImageView.ScaleType.FIT_CENTER
+            layoutParams = LinearLayout.LayoutParams(cell - dp(16), cell - dp(16))
+        })
+        addView(TextView(context).apply {
+            text = s.label.ifBlank { "sin nombre" }
+            textSize = 10f
+            maxLines = 1
+            gravity = Gravity.CENTER
+            setTextColor(theme.keyText)
+            alpha = if (s.label.isBlank()) 0.5f else 0.8f
+        })
+        setOnClickListener { sendSticker(s) }
+        setOnLongClickListener {
+            startNaming(s)
+            true
+        }
+    }
+
+    // ----- Nombrar desde el teclado -----
+
+    private fun startNaming(s: Sticker) {
+        namingSticker = s
+        namingSelected.clear()
+        val existing = s.label.split(",").map { it.trim() }.filter { it.isNotEmpty() }
+        namingSelected.addAll(existing.filter { it in NameOptions.list })
+        namingExtra = existing.filter { it !in NameOptions.list } // nombres escritos a mano se conservan
+        renderPanel()
+    }
+
+    private fun styleChip(tv: TextView, on: Boolean) {
+        tv.setTextColor(if (on) Color.WHITE else theme.keyText)
+        tv.background = android.graphics.drawable.InsetDrawable(
+            round(if (on) theme.accent else theme.key, 10), dp(2), dp(2), dp(2), dp(2)
+        )
+    }
+
+    private fun renderNaming(s: Sticker) {
+        val body = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER_HORIZONTAL
+            setPadding(dp(8), dp(4), dp(8), dp(4))
+        }
+        body.addView(ImageView(this).apply {
+            loadSticker(s.file)
+            scaleType = ImageView.ScaleType.FIT_CENTER
+        }, LinearLayout.LayoutParams(dp(110), dp(110)))
+        body.addView(TextView(this).apply {
+            text = "¿Qué expresa? (puedes elegir varios)"
+            textSize = 13f
+            setTextColor(theme.keyText)
+            alpha = 0.8f
+            setPadding(0, dp(4), 0, dp(4))
+        })
+
+        val grid = GridLayout(this).apply { columnCount = 4 }
+        val w = (resources.displayMetrics.widthPixels - dp(16)) / 4
+        NameOptions.list.forEach { word ->
+            val chip = TextView(this)
+            chip.text = word
+            chip.textSize = 13f
+            chip.gravity = Gravity.CENTER
+            chip.maxLines = 1
+            chip.layoutParams = GridLayout.LayoutParams().apply {
+                width = w
+                height = dp(40)
+            }
+            styleChip(chip, word in namingSelected)
+            chip.setOnClickListener {
+                if (!namingSelected.remove(word)) namingSelected.add(word)
+                styleChip(chip, word in namingSelected)
+            }
+            grid.addView(chip)
+        }
+        body.addView(grid)
+        val scroll = ScrollView(this)
+        scroll.addView(body)
+        panel.addView(scroll, LinearLayout.LayoutParams(-1, 0, 1f))
+
+        fun lp(weight: Float) = LinearLayout.LayoutParams(0, dp(40), weight).apply { setMargins(dp(4), dp(3), dp(4), dp(3)) }
+        val bottom = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        bottom.addView(labelButton("Cancelar") {
+            namingSticker = null
+            renderPanel()
+        }, lp(1f))
+        bottom.addView(labelButton("Escribir…") { openTypedNaming(s) }, lp(1f))
+        bottom.addView(labelButton("Guardar", accent = true) { saveNaming(s) }, lp(1.3f))
+        panel.addView(bottom, LinearLayout.LayoutParams(-1, dp(46)))
+    }
+
+    private fun saveNaming(s: Sticker) {
+        val label = (namingSelected.toList() + namingExtra).distinct().joinToString(", ")
+        repo.setLabel(s.file, label)
+        stickers = repo.all()
+        namingSticker = null
+        renderPanel()
+        refreshSuggestions()
+        Toast.makeText(this, if (label.isBlank()) "Nombre quitado" else "Guardado: $label", Toast.LENGTH_SHORT).show()
+    }
+
+    /** Para un nombre que no está en los botones: abre la pantalla de la app, donde sí se puede escribir. */
+    private fun openTypedNaming(s: Sticker) {
+        try {
+            startActivity(QuickNameActivity.intentFor(this, listOf(s.file)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+        } catch (_: Exception) {
+            Toast.makeText(this, "No pude abrir la pantalla de nombres", Toast.LENGTH_SHORT).show()
+        }
+        namingSticker = null
+        renderPanel()
+    }
+
+    /** Envía un sticker (desde la barra de sugerencias o desde el panel) y lo cuenta como usado. */
+    private fun sendSticker(s: Sticker) {
+        val ok = StickerSender.send(this, currentInputConnection, currentInputEditorInfo, s.file)
+        if (!ok) {
+            Toast.makeText(this, StickerSender.lastError.ifEmpty { "No se pudo enviar el sticker" }, Toast.LENGTH_LONG).show()
+            return
+        }
+        if (StickerSender.lastNote.isNotEmpty()) Toast.makeText(this, StickerSender.lastNote, Toast.LENGTH_LONG).show()
+        repo.recordUse(s.file)
+        pendingStickers = emptyList()
+        showPending = false
+        refreshSuggestions()
     }
 
     // ---------- Temas ----------
@@ -682,6 +931,7 @@ class KeyboardService : InputMethodService() {
     }
 
     companion object {
+        private const val TAB_TOP = "*top"
         private val WORD_END = Regex("[\\p{L}'’]+$")
         private val PREV_WORD = Regex("([\\p{L}'’]+)\\s+$")
     }
