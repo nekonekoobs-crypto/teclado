@@ -145,20 +145,40 @@ class StickerRepository(private val context: Context) {
     // ---------- Guardar stickers recibidos desde otras apps (Compartir) ----------
 
     /** Guarda imágenes compartidas en el paquete "Guardados". Devuelve (nuevas, repetidas). */
+    /** Cuántos archivos se omitieron en la última importación y por qué (para avisar al usuario). */
+    @Volatile var lastNotImage = 0
+    @Volatile var lastUnreadable = 0
+    @Volatile var lastTooBig = 0
+
     fun importShared(uris: List<Uri>): Pair<Int, Int> {
+        lastNotImage = 0
+        lastUnreadable = 0
+        lastTooBig = 0
         val dir = File(root, "guardados").also { it.mkdirs() }
         val nameFile = File(dir, "name.txt")
         if (!nameFile.exists()) nameFile.writeText("Guardados")
         var added = 0
         var duplicates = 0
         for (uri in uris) {
-            val bytes = (try {
+            val bytes: ByteArray? = try {
                 context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
             } catch (_: Exception) {
                 null
-            }) ?: continue
-            if (bytes.size > 10_000_000) continue
-            val ext = sniffExtension(bytes) ?: continue
+            }
+            if (bytes == null) {
+                lastUnreadable++
+                continue
+            }
+            if (bytes.size > 10_000_000) {
+                lastTooBig++
+                continue
+            }
+            // El formato se reconoce por el contenido, no por el nombre: en esa carpeta los archivos pueden no tener extensión
+            val ext = sniffExtension(bytes)
+            if (ext == null) {
+                lastNotImage++
+                continue
+            }
             val hash = java.security.MessageDigest.getInstance("SHA-1").digest(bytes)
                 .joinToString("") { "%02x".format(it) }.take(12)
             val base = "guardado_$hash"
@@ -188,6 +208,14 @@ class StickerRepository(private val context: Context) {
     fun createPackDir(name: String): File =
         File(root, name.replace(Regex("[^\\p{L}\\p{N}_-]"), "_") + "_" + System.currentTimeMillis())
             .also { it.mkdirs() }
+
+    /** Paquete fijo "Mis stickers" para lo creado desde video. */
+    fun myStickersDir(): File {
+        val d = File(root, "mis_stickers").also { it.mkdirs() }
+        val n = File(d, "name.txt")
+        if (!n.exists()) n.writeText("Mis stickers")
+        return d
+    }
 
     fun packCount(): Int = root.listFiles()?.count { it.isDirectory } ?: 0
 

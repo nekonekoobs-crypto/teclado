@@ -47,14 +47,18 @@ class MainActivity : ComponentActivity() {
                 0 to 0
             }
             runOnUiThread {
-                toast(
-                    when {
-                        added > 0 && duplicates > 0 -> "$added nuevos guardados ($duplicates ya estaban)"
-                        added > 0 -> "$added stickers guardados en \"Guardados\""
-                        duplicates > 0 -> "Ya estaban guardados"
-                        else -> "No encontré imágenes compatibles"
-                    }
-                )
+                val sb = StringBuilder()
+                if (added > 0) sb.append("• $added stickers guardados en \"Guardados\".\n")
+                if (duplicates > 0) sb.append("• $duplicates ya estaban guardados.\n")
+                if (repo.lastNotImage > 0) sb.append("• ${repo.lastNotImage} no son una imagen que la app reconozca (solo acepta WebP, PNG, GIF y JPG).\n")
+                if (repo.lastTooBig > 0) sb.append("• ${repo.lastTooBig} pesan más de 10 MB.\n")
+                if (repo.lastUnreadable > 0) sb.append("• ${repo.lastUnreadable} no se pudieron abrir (la app no tiene permiso para leerlos).\n")
+                if (sb.isEmpty()) sb.append("No se seleccionó ningún archivo.")
+                AlertDialog.Builder(this)
+                    .setTitle("Importación terminada")
+                    .setMessage(sb.toString().trim())
+                    .setPositiveButton("OK", null)
+                    .show()
                 refresh()
             }
         }.start()
@@ -101,11 +105,12 @@ class MainActivity : ComponentActivity() {
                         "Elige los que quieras guardar (mantén pulsado uno para seleccionar varios). " +
                         "Los repetidos se omiten. La ruta puede variar según la marca del teléfono."
                 )
-                .setPositiveButton("Abrir") { _, _ -> pickWhatsApp.launch(arrayOf("image/*")) }
+                .setPositiveButton("Abrir") { _, _ -> pickWhatsApp.launch(arrayOf("*/*")) }
                 .setNegativeButton("Cancelar", null)
                 .show()
         }
 
+        button("Crear sticker desde un video") { startActivity(Intent(this, StickerMakerActivity::class.java)) }
         button("Ver mis paquetes de stickers") { startActivity(Intent(this, PacksActivity::class.java)) }
 
         col.addView(CheckBox(this).apply {
