@@ -1,6 +1,0 @@
-<?xml version="1.0" encoding="utf-8"?>
-<paths>
-    <files-path name="packs" path="packs/" />
-    <files-path name="clips" path="clips/" />
-    <cache-path name="send" path="send/" />
-</paths>
