@@ -188,6 +188,58 @@ object VideoStickerMaker {
         }
     }
 
+    // ---------- Audio del tramo (para stickers con sonido) ----------
+
+    /** Guarda solo el audio del tramo (sin recomprimir). Devuelve null si salió bien, o el motivo. */
+    fun extractAudio(context: Context, uri: Uri, startMs: Long, lenMs: Long, dest: File): String? {
+        val ex = MediaExtractor()
+        var mux: MediaMuxer? = null
+        var started = false
+        return try {
+            ex.setDataSource(context, uri, null)
+            var audioTrack = -1
+            for (i in 0 until ex.trackCount) {
+                val mime = ex.getTrackFormat(i).getString(MediaFormat.KEY_MIME) ?: continue
+                if (mime.startsWith("audio/")) {
+                    audioTrack = i
+                    break
+                }
+            }
+            if (audioTrack < 0) return "El video no tiene audio."
+            ex.selectTrack(audioTrack)
+            val m = MediaMuxer(dest.absolutePath, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
+            mux = m
+            val out = m.addTrack(ex.getTrackFormat(audioTrack))
+            m.start()
+            started = true
+            ex.seekTo(startMs * 1000, MediaExtractor.SEEK_TO_CLOSEST_SYNC)
+            val buf = ByteBuffer.allocate(1024 * 1024)
+            val info = MediaCodec.BufferInfo()
+            val endUs = (startMs + lenMs) * 1000
+            var baseUs = -1L
+            var written = 0
+            while (true) {
+                buf.clear()
+                val size = ex.readSampleData(buf, 0)
+                if (size < 0) break
+                val t = ex.sampleTime
+                if (t > endUs) break
+                if (baseUs < 0) baseUs = t
+                info.set(0, size, maxOf(0L, t - baseUs), MediaCodec.BUFFER_FLAG_KEY_FRAME)
+                m.writeSampleData(out, buf, info)
+                written++
+                ex.advance()
+            }
+            if (written == 0) "No encontré audio en ese tramo." else null
+        } catch (e: Throwable) {
+            "Error: ${e.javaClass.simpleName} ${e.message.orEmpty()}"
+        } finally {
+            try { if (started) mux?.stop() } catch (_: Exception) {}
+            try { mux?.release() } catch (_: Exception) {}
+            try { ex.release() } catch (_: Exception) {}
+        }
+    }
+
     // ---------- Clip con audio ----------
 
     /** Recorta el tramo a un MP4 sin recomprimir (conserva el audio). Devuelve null si salió bien, o el error. */

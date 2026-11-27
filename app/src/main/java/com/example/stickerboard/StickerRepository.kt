@@ -66,6 +66,7 @@ class StickerRepository(private val context: Context) {
     fun deleteSticker(file: File) {
         setLabel(file, "")
         file.delete()
+        File(file.parentFile, file.nameWithoutExtension + ".audio.m4a").delete()
     }
 
     /** Copia imágenes elegidas por el usuario dentro de un paquete y devuelve los archivos nuevos. */

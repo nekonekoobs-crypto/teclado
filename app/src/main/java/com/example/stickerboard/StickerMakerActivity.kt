@@ -38,6 +38,7 @@ class StickerMakerActivity : ComponentActivity() {
     private lateinit var startBar: SeekBar
     private lateinit var lenBar: SeekBar
     private lateinit var fillBox: CheckBox
+    private lateinit var audioBox: CheckBox
     private lateinit var lenBox: LinearLayout
     private lateinit var modeGroup: RadioGroup
     private lateinit var createBtn: Button
@@ -134,6 +135,12 @@ class StickerMakerActivity : ComponentActivity() {
         }
         col.addView(fillBox)
 
+        audioBox = CheckBox(this).apply {
+            text = "Guardar también el audio del tramo, para stickers con sonido (hoy WhatsApp no lo recibe desde teclados)"
+            isChecked = true
+        }
+        col.addView(audioBox)
+
         createBtn = Button(this).apply {
             text = "Crear"
             isEnabled = false
@@ -153,6 +160,7 @@ class StickerMakerActivity : ComponentActivity() {
     private fun onModeChanged() {
         lenBox.visibility = if (isStatic()) View.GONE else View.VISIBLE
         fillBox.visibility = if (isClip()) View.GONE else View.VISIBLE
+        audioBox.visibility = if (isClip() || isStatic()) View.GONE else View.VISIBLE
         if (isClip()) {
             lenBar.max = 290 // hasta 30 s
         } else {
@@ -212,6 +220,7 @@ class StickerMakerActivity : ComponentActivity() {
             return
         }
         val fill = fillBox.isChecked
+        val wantAudio = audioBox.isChecked
         val animated = !isStatic() && !isClip()
         busy = true
         createBtn.isEnabled = false
@@ -232,7 +241,15 @@ class StickerMakerActivity : ComponentActivity() {
                         val r = VideoStickerMaker.createAnimated(this, uri, start, len, fill, dest) { msg ->
                             runOnUiThread { status.text = msg }
                         }
-                        runOnUiThread { finishSticker(dest, r) }
+                        var audioNote = ""
+                        if (r.ok && wantAudio) {
+                            val audioFile = File(dest.parentFile, dest.nameWithoutExtension + ".audio.m4a")
+                            val err = VideoStickerMaker.extractAudio(this, uri, start, len, audioFile)
+                            if (err != null) audioFile.delete()
+                            audioNote = if (err == null) "\nAudio guardado junto al sticker." else "\nSin audio: $err"
+                        }
+                        val full = VideoStickerMaker.Result(r.ok, r.message + audioNote)
+                        runOnUiThread { finishSticker(dest, full) }
                     }
                     else -> {
                         val dest = File(repo.myStickersDir(), "video_$stamp.webp")

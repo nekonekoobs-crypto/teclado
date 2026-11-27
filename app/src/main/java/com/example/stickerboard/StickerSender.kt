@@ -6,6 +6,7 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.ImageDecoder
 import android.os.Build
+import android.os.Bundle
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputConnection
 import androidx.core.content.FileProvider
@@ -23,6 +24,16 @@ object StickerSender {
     /** Aviso para el usuario cuando el sticker se envió distinto al original (por ejemplo, fijo en vez de animado). */
     @Volatile
     var lastNote: String = ""
+
+    /** Tipo propuesto a WhatsApp (issue #1167 de WhatsApp/stickers). Hoy WhatsApp NO lo ofrece. */
+    private const val SOUND_MIME = "image/webp.wasticker.sound"
+
+    /** Clave del audio en las opciones. WhatsApp no ha definido ninguna: es un valor provisional. */
+    private const val AUDIO_KEY = "audio_uri"
+
+    /** Audio guardado junto al sticker (lo crea el menú de video), si existe. */
+    fun audioFor(file: File): File? =
+        File(file.parentFile, file.nameWithoutExtension + ".audio.m4a").takeIf { it.exists() }
 
     /**
      * Envía el sticker al campo de texto. Si la app no acepta el formato (por ejemplo WebP)
@@ -46,6 +57,19 @@ object StickerSender {
         // WhatsApp puede anunciar un tipo propio para stickers WebP. Si está, se usa primero:
         // así el archivo se entrega como sticker y no como una imagen cualquiera.
         val waSticker = "image/webp.wasticker"
+        val audio = audioFor(file)
+        if (audio != null && original == "image/webp" && supported.any { it.equals(SOUND_MIME, ignoreCase = true) }) {
+            val extras = try {
+                val u = FileProvider.getUriForFile(context, "${context.packageName}.stickers", audio)
+                info.packageName?.let { context.grantUriPermission(it, u, android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION) }
+                Bundle().apply { putParcelable(AUDIO_KEY, u) }
+            } catch (_: Exception) {
+                null
+            }
+            if (extras != null && commit(context, ic, info, file, SOUND_MIME, extras)) return true
+            // Si no lo acepta, se sigue con el sticker normal (sin sonido)
+        }
+        if (audio != null) lastNote = "Se envió sin sonido: WhatsApp todavía no permite audio desde teclados"
         if (original == "image/webp" && supported.any { it.equals(waSticker, ignoreCase = true) }) {
             if (commit(context, ic, info, file, waSticker)) return true
             // Si lo rechaza, se sigue con el flujo normal (WebP y luego PNG)
@@ -79,7 +103,9 @@ object StickerSender {
         return false
     }
 
-    private fun commit(context: Context, ic: InputConnection, info: EditorInfo, file: File, mime: String): Boolean {
+    private fun commit(
+        context: Context, ic: InputConnection, info: EditorInfo, file: File, mime: String, opts: Bundle? = null
+    ): Boolean {
         lastError = ""
         val uri = try {
             FileProvider.getUriForFile(context, "${context.packageName}.stickers", file)
@@ -91,7 +117,7 @@ object StickerSender {
         val content = InputContentInfoCompat(uri, description, null)
         val flags = if (Build.VERSION.SDK_INT >= 25) InputConnectionCompat.INPUT_CONTENT_GRANT_READ_URI_PERMISSION else 0
         val ok = try {
-            InputConnectionCompat.commitContent(ic, info, content, flags, null)
+            InputConnectionCompat.commitContent(ic, info, content, flags, opts)
         } catch (e: Exception) {
             lastError = "Error al enviar (${e.javaClass.simpleName})"
             false
