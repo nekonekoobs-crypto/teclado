@@ -67,6 +67,7 @@ class StickerRepository(private val context: Context) {
         setLabel(file, "")
         file.delete()
         File(file.parentFile, file.nameWithoutExtension + ".audio.m4a").delete()
+        File(file.parentFile, file.nameWithoutExtension + ".audio.ogg").delete()
     }
 
     /** Copia imágenes elegidas por el usuario dentro de un paquete y devuelve los archivos nuevos. */

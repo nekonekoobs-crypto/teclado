@@ -33,7 +33,7 @@ object StickerSender {
 
     /** Audio guardado junto al sticker (lo crea el menú de video), si existe. */
     fun audioFor(file: File): File? =
-        File(file.parentFile, file.nameWithoutExtension + ".audio.m4a").takeIf { it.exists() }
+        listOf("ogg", "m4a").map { File(file.parentFile, file.nameWithoutExtension + ".audio.$it") }.firstOrNull { it.exists() }
 
     /**
      * Envía el sticker al campo de texto. Si la app no acepta el formato (por ejemplo WebP)

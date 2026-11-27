@@ -243,10 +243,18 @@ class StickerMakerActivity : ComponentActivity() {
                         }
                         var audioNote = ""
                         if (r.ok && wantAudio) {
-                            val audioFile = File(dest.parentFile, dest.nameWithoutExtension + ".audio.m4a")
-                            val err = VideoStickerMaker.extractAudio(this, uri, start, len, audioFile)
-                            if (err != null) audioFile.delete()
-                            audioNote = if (err == null) "\nAudio guardado junto al sticker." else "\nSin audio: $err"
+                            val ogg = File(dest.parentFile, dest.nameWithoutExtension + ".audio.ogg")
+                            val opusErr = VideoStickerMaker.encodeOpus(this, uri, start, len, ogg)
+                            if (opusErr == null) {
+                                val marked = VideoStickerMaker.addSoundExif(dest, ogg, "Mis stickers")
+                                audioNote = "\nAudio Ogg/Opus guardado" + if (marked) " y marca de sonido escrita." else " (no pude escribir la marca)."
+                            } else {
+                                ogg.delete()
+                                val m4a = File(dest.parentFile, dest.nameWithoutExtension + ".audio.m4a")
+                                val err = VideoStickerMaker.extractAudio(this, uri, start, len, m4a)
+                                if (err != null) m4a.delete()
+                                audioNote = if (err == null) "\nAudio guardado en AAC ($opusErr)" else "\nSin audio: $err"
+                            }
                         }
                         val full = VideoStickerMaker.Result(r.ok, r.message + audioNote)
                         runOnUiThread { finishSticker(dest, full) }

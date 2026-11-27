@@ -240,6 +240,213 @@ object VideoStickerMaker {
         }
     }
 
+    // ---------- Audio en Ogg/Opus y marca de sonido (formato de los stickers con sonido de WhatsApp) ----------
+
+    /** Audio del tramo como Ogg/Opus mono a 48 kHz. Devuelve null si salió bien, o el motivo. Requiere Android 10+. */
+    fun encodeOpus(context: Context, uri: Uri, startMs: Long, lenMs: Long, dest: File): String? {
+        if (Build.VERSION.SDK_INT < 29) return "Necesita Android 10 o superior."
+        return try {
+            val pcm = decodeMono48k(context, uri, startMs, lenMs) ?: return "El video no tiene audio."
+            if (pcm.isEmpty()) return "No encontré audio en ese tramo."
+            opusEncode(pcm, dest)
+        } catch (e: Throwable) {
+            "Error: ${e.javaClass.simpleName} ${e.message.orEmpty()}"
+        }
+    }
+
+    private fun decodeMono48k(context: Context, uri: Uri, startMs: Long, lenMs: Long): ShortArray? {
+        val ex = MediaExtractor()
+        var dec: MediaCodec? = null
+        try {
+            ex.setDataSource(context, uri, null)
+            var track = -1
+            var fmt: MediaFormat? = null
+            for (i in 0 until ex.trackCount) {
+                val f = ex.getTrackFormat(i)
+                val mime = f.getString(MediaFormat.KEY_MIME) ?: continue
+                if (mime.startsWith("audio/")) {
+                    track = i
+                    fmt = f
+                    break
+                }
+            }
+            if (track < 0 || fmt == null) return null
+            ex.selectTrack(track)
+            ex.seekTo(startMs * 1000, MediaExtractor.SEEK_TO_CLOSEST_SYNC)
+            val d = MediaCodec.createDecoderByType(fmt.getString(MediaFormat.KEY_MIME)!!)
+            dec = d
+            d.configure(fmt, null, null, 0)
+            d.start()
+            var rate = fmt.getInteger(MediaFormat.KEY_SAMPLE_RATE)
+            var channels = fmt.getInteger(MediaFormat.KEY_CHANNEL_COUNT)
+            val endUs = (startMs + lenMs) * 1000
+            val info = MediaCodec.BufferInfo()
+            val raw = ByteArrayOutputStream()
+            var inDone = false
+            var outDone = false
+            while (!outDone) {
+                if (!inDone) {
+                    val ii = d.dequeueInputBuffer(10000)
+                    if (ii >= 0) {
+                        val ib = d.getInputBuffer(ii)!!
+                        val n = ex.readSampleData(ib, 0)
+                        val t = ex.sampleTime
+                        if (n < 0 || t > endUs) {
+                            d.queueInputBuffer(ii, 0, 0, 0, MediaCodec.BUFFER_FLAG_END_OF_STREAM)
+                            inDone = true
+                        } else {
+                            d.queueInputBuffer(ii, 0, n, t, 0)
+                            ex.advance()
+                        }
+                    }
+                }
+                val oi = d.dequeueOutputBuffer(info, 10000)
+                if (oi >= 0) {
+                    val ob = d.getOutputBuffer(oi)!!
+                    val chunk = ByteArray(info.size)
+                    ob.position(info.offset)
+                    ob.get(chunk, 0, info.size)
+                    raw.write(chunk)
+                    d.releaseOutputBuffer(oi, false)
+                    if (info.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0) outDone = true
+                } else if (oi == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
+                    val of = d.outputFormat
+                    rate = of.getInteger(MediaFormat.KEY_SAMPLE_RATE)
+                    channels = of.getInteger(MediaFormat.KEY_CHANNEL_COUNT)
+                }
+            }
+            val shorts = java.nio.ByteBuffer.wrap(raw.toByteArray()).order(java.nio.ByteOrder.LITTLE_ENDIAN).asShortBuffer()
+            val all = ShortArray(shorts.remaining())
+            shorts.get(all)
+            val frames = all.size / channels
+            if (frames == 0) return ShortArray(0)
+            val mono = ShortArray(frames) { i ->
+                var sum = 0
+                for (c in 0 until channels) sum += all[i * channels + c].toInt()
+                (sum / channels).toShort()
+            }
+            if (rate == 48000) return mono
+            val outLen = (frames.toLong() * 48000 / rate).toInt()
+            return ShortArray(outLen) { i ->
+                val p = i.toDouble() * rate / 48000
+                val i0 = p.toInt().coerceAtMost(frames - 1)
+                val i1 = (i0 + 1).coerceAtMost(frames - 1)
+                val fr = p - i0
+                (mono[i0] * (1 - fr) + mono[i1] * fr).toInt().toShort()
+            }
+        } finally {
+            try { dec?.stop() } catch (_: Exception) {}
+            try { dec?.release() } catch (_: Exception) {}
+            try { ex.release() } catch (_: Exception) {}
+        }
+    }
+
+    private fun opusEncode(pcm: ShortArray, dest: File): String? {
+        var enc: MediaCodec? = null
+        var mux: MediaMuxer? = null
+        var started = false
+        try {
+            val format = MediaFormat.createAudioFormat("audio/opus", 48000, 1)
+            format.setInteger(MediaFormat.KEY_BIT_RATE, 32000)
+            val e = MediaCodec.createEncoderByType("audio/opus")
+            enc = e
+            e.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
+            e.start()
+            val m = MediaMuxer(dest.absolutePath, MediaMuxer.OutputFormat.MUXER_OUTPUT_OGG)
+            mux = m
+            var track = -1
+            val info = MediaCodec.BufferInfo()
+            var pos = 0
+            var inDone = false
+            var outDone = false
+            while (!outDone) {
+                if (!inDone) {
+                    val ii = e.dequeueInputBuffer(10000)
+                    if (ii >= 0) {
+                        val ib = e.getInputBuffer(ii)!!
+                        ib.clear()
+                        ib.order(java.nio.ByteOrder.LITTLE_ENDIAN)
+                        val n = minOf(ib.remaining() / 2, pcm.size - pos)
+                        val pts = pos * 1_000_000L / 48000
+                        if (n <= 0) {
+                            e.queueInputBuffer(ii, 0, 0, pts, MediaCodec.BUFFER_FLAG_END_OF_STREAM)
+                            inDone = true
+                        } else {
+                            for (k in 0 until n) ib.putShort(pcm[pos + k])
+                            e.queueInputBuffer(ii, 0, n * 2, pts, 0)
+                            pos += n
+                        }
+                    }
+                }
+                val oi = e.dequeueOutputBuffer(info, 10000)
+                if (oi == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
+                    track = m.addTrack(e.outputFormat)
+                    m.start()
+                    started = true
+                } else if (oi >= 0) {
+                    val ob = e.getOutputBuffer(oi)!!
+                    if (info.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG != 0) info.size = 0
+                    if (info.size > 0 && started) {
+                        ob.position(info.offset)
+                        ob.limit(info.offset + info.size)
+                        m.writeSampleData(track, ob, info)
+                    }
+                    e.releaseOutputBuffer(oi, false)
+                    if (info.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0) outDone = true
+                }
+            }
+            return if (started) null else "El codificador Opus no produjo audio."
+        } catch (e: Throwable) {
+            return "Opus no disponible en este teléfono (${e.javaClass.simpleName})."
+        } finally {
+            try { if (started) mux?.stop() } catch (_: Exception) {}
+            try { mux?.release() } catch (_: Exception) {}
+            try { enc?.stop() } catch (_: Exception) {}
+            try { enc?.release() } catch (_: Exception) {}
+        }
+    }
+
+    /**
+     * Escribe en el WebP el bloque EXIF que usan los stickers con sonido de WhatsApp (etiqueta 0x5741 con un JSON),
+     * incluida la marca "sound-sha256" = SHA-256 en base64 del audio Ogg/Opus. Copia la estructura de
+     * stickers reales recibidos en WhatsApp. Devuelve false si no pudo (no cambia nada en ese caso).
+     */
+    fun addSoundExif(file: File, audio: File, packName: String): Boolean {
+        return try {
+            val b = file.readBytes()
+            if (b.size < 30 || String(b, 0, 4, L1) != "RIFF" || String(b, 8, 4, L1) != "WEBP" || String(b, 12, 4, L1) != "VP8X") return false
+            val sha = java.security.MessageDigest.getInstance("SHA-256").digest(audio.readBytes())
+            val json = org.json.JSONObject().apply {
+                put("sticker-pack-id", java.util.UUID.randomUUID().toString())
+                put("sticker-pack-name", packName)
+                put("sticker-pack-publisher", "StickerBoard")
+                put("is-from-user-created-pack", 1)
+                put("sound-sha256", android.util.Base64.encodeToString(sha, android.util.Base64.NO_WRAP))
+            }.toString().toByteArray(Charsets.UTF_8)
+
+            val exif = ByteArrayOutputStream()
+            // Cabecera TIFF (big-endian) con una sola entrada: etiqueta 0x5741, tipo 7, N bytes, datos en el byte 26
+            exif.write(byteArrayOf(0x4D, 0x4D, 0x00, 0x2A, 0x00, 0x00, 0x00, 0x08, 0x00, 0x01, 0x57, 0x41, 0x00, 0x07))
+            exif.write(java.nio.ByteBuffer.allocate(4).order(java.nio.ByteOrder.BIG_ENDIAN).putInt(json.size).array())
+            exif.write(byteArrayOf(0x00, 0x00, 0x00, 0x1A, 0x00, 0x00, 0x00, 0x00))
+            exif.write(json)
+            val data = exif.toByteArray()
+
+            val out = ByteArrayOutputStream()
+            out.write(b)
+            out.tag("EXIF"); out.w32(data.size); out.write(data)
+            if (data.size and 1 == 1) out.write(0)
+            val res = out.toByteArray()
+            res[20] = (res[20].toInt() or 0x08).toByte() // VP8X: hay bloque EXIF
+            val riff = res.size - 8
+            for (i in 0..3) res[4 + i] = ((riff shr (8 * i)) and 0xFF).toByte()
+            file.writeBytes(res)
+            true
+        } catch (_: Exception) {
+            false
+        }
+    }
+
     // ---------- Clip con audio ----------
 
     /** Recorta el tramo a un MP4 sin recomprimir (conserva el audio). Devuelve null si salió bien, o el error. */
